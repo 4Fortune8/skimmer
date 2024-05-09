@@ -35,18 +35,54 @@ time.sleep(3)  # Wait for 3 seconds
 driver.find_element(By.CSS_SELECTOR, ".ytd-mini-guide-renderer:nth-child(1) > #endpoint").click()
 # Iterate over the elements and get their CSS data
 driver.refresh()
-
-# Close the driver
 time.sleep(3)  # Wait for 3 seconds
 
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
 
+time.sleep(.5)  # Wait for 3 seconds
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
+
+time.sleep(.5)  # Wait for 3 seconds
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
+
+time.sleep(.5)  # Wait for 3 seconds
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
+
+time.sleep(.5)  # Wait for 3 seconds
+
+# Close the driver
 
 
 elements = driver.find_elements(By.CSS_SELECTOR,"ytd-rich-grid-row.style-scope > div > ytd-rich-item-renderer> div > ytd-rich-grid-media:nth-child(1) > div:nth-child(1) > div:nth-child(3) ")
-
+dataset = []
+print(len(elements))
 for element in elements:
     # Get the outer HTML of the element
-    print(element.text)
+    text = element.text
+    text_array = text.splitlines()
+
     child_element = element.find_element(By.CSS_SELECTOR,"div:nth-child(3)  > a")
     link = child_element.get_attribute('href')
-    print(link)
+    try:
+        text_array.append(link[25:])
+        dataset.append(text_array)
+    except:
+        continue
+
+
+import csv
+from datetime import datetime
+
+# Define your headers
+headers = ["video_name", "chanel_display_name", "views", 'age', 'chanel_id']  # Replace with your actual headers
+
+# Open the CSV file in write mode
+with open('output.csv', 'w', newline='') as file:
+    writer = csv.writer(file)
+
+    # Write the headers
+    writer.writerow(headers)
+
+    # Write the data
+    for data in dataset:
+        writer.writerow(data)
