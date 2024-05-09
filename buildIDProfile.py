@@ -99,6 +99,7 @@ class BlogSpider(scrapy.Spider):
                     data.append((currentAccount,subscribers,newsubscribers,text[1]))
                 yield self.addProfile([currentAccount,subscribers,newsubscribers,text[1]])
         except:
+            currentAccount= response.request.meta['redirect_urls'][0][len(self.base):]
             yield self.addProfile([currentAccount,subscribers,0,0])
     
     
