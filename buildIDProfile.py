@@ -2,7 +2,7 @@ import scrapy
 import csv
 from scrapy.crawler import CrawlerProcess
 from bs4 import BeautifulSoup, Tag
-
+import time
 def print_css_tree(html):
     soup = BeautifulSoup(html, 'html.parser')
 
@@ -68,37 +68,44 @@ class BlogSpider(scrapy.Spider):
         with open('data\output2024-05-08-225040.csv', 'r', encoding='utf-8') as file:
             reader = csv.reader(file)
             data = list(reader)
-            for row in data[1:10]:
+            for row in data[1:]:
                 booler = checkProfile(row[4],profiles)
                 if not booler:
                     self.start_urls.append(self.base+(row[4]))
 
     
     def parse(self, response):
-        for title in response.css('#socialblade-user-content > div:nth-child(3) > div:nth-child(1)>p:nth-child(1)'):
-            text=  title.css('::text').extract()
-            data= []
-            text = extract_values(text)
-            text[0] = text[0].strip()  # Remove leading and trailing whitespace
-            subscribers = convert_to_number(text[0])
-            color= title.css('sup>span::attr(style)').extract()
-            currentAccount= response.request.meta['redirect_urls'][0][len(self.base):]
-            text[1]= text[1][:-1]
-            if color[0] == "color:#e53b00;":
-                text[1]='-'+text[1]
-                print(currentAccount,subscribers,text[1])
-                data.append((currentAccount,subscribers,text[1]))
-            else:
-                data.append((currentAccount,subscribers,text[1]))
-            yield self.addProfile([currentAccount,subscribers,text[1]])
+        time.sleep(10)
+        # Extract data from the new CSS selector
+        for element in response.css('div.YouTubeUserTopInfo:nth-child(3) > span:nth-child(3)'):
+            subscribers = element.css('::text').extract_first().strip()
             
+            subscribers = convert_to_number(subscribers.strip())
+        try:
+            for title in response.css('#socialblade-user-content > div:nth-child(3) > div:nth-child(1)>p:nth-child(1)'):
+                text=  title.css('::text').extract()
+                data= []
+                text = extract_values(text)
+                text[0] = text[0].strip()  # Remove leading and trailing whitespace
+                newsubscribers = convert_to_number(text[0])
+                color= title.css('sup>span::attr(style)').extract()
+                currentAccount= response.request.meta['redirect_urls'][0][len(self.base):]
+                text[1]= text[1][:-1]
+                if color[0] == "color:#e53b00;":
+                    text[1]='-'+text[1]
+                    print(currentAccount,subscribers,newsubscribers,text[1])
+                    data.append((currentAccount,subscribers,newsubscribers,text[1]))
+                else:
+                    data.append((currentAccount,subscribers,newsubscribers,text[1]))
+                yield self.addProfile([currentAccount,subscribers,newsubscribers,text[1]])
+        except:
+            yield self.addProfile([currentAccount,subscribers,0,0])
     
     
     def addProfile(self, profile):
         with open('data\profiles\profiles2024-5.csv', 'a',newline='', encoding='utf-8') as file:
             writer = csv.writer(file)
-            print(writer)
-            writer.writerow([profile[0],profile[1],profile[2]])
+            writer.writerow([profile[0],profile[1],profile[2],profile[3]])
 
 
 
