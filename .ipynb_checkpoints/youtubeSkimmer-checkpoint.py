@@ -43,24 +43,16 @@ driver.find_element(By.CSS_SELECTOR, ".ytd-mini-guide-renderer:nth-child(1) > #e
 # Iterate over the elements and get their CSS data
 driver.refresh()
 time.sleep(3)  # Wait for 3 seconds
+scrollable_element = driver.find_element(By.CSS_SELECTOR, "div.ytd-app:nth-child(6)")
 driver.execute_script("window.scrollTo(0, 1000);")
+time.sleep(.5)  # Wait for 3 seconds
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
 
 time.sleep(.5)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
-time.sleep(.5)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
 
 time.sleep(.5)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
-
-time.sleep(.5)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
-
-time.sleep(.5)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
-
-time.sleep(.5)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
 
 time.sleep(.5)  # Wait for 3 seconds
 
@@ -86,12 +78,12 @@ for element in elements:
 
 import csv
 from datetime import datetime
-savetime= datetime.now().strftime("%Y-%m-%d%H%M%S")
+
 # Define your headers
 headers = ["video_name", "chanel_display_name", "views", 'age', 'chanel_id']  # Replace with your actual headers
 
 # Open the CSV file in write mode
-with open('data/output'+savetime+'.csv',  'w', newline='', encoding='utf-8') as file:
+with open('output.csv', 'w', newline='') as file:
     writer = csv.writer(file)
 
     # Write the headers
@@ -100,4 +92,3 @@ with open('data/output'+savetime+'.csv',  'w', newline='', encoding='utf-8') as 
     # Write the data
     for data in dataset:
         writer.writerow(data)
-    driver.close()
