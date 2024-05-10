@@ -86,7 +86,6 @@ class BlogSpider(scrapy.Spider):
         # Extract data from the new CSS selector
         for element in response.css('div.YouTubeUserTopInfo:nth-child(3) > span:nth-child(3)'):
             subscribers = element.css('::text').extract_first().strip()
-            
             subscribers = convert_to_number(subscribers.strip())
         try:
             for title in response.css('#socialblade-user-content > div:nth-child(3) '):
@@ -98,15 +97,16 @@ class BlogSpider(scrapy.Spider):
                 newviews = convert_to_number(text[2])
                 color= title.css('sup>span::attr(style)').extract()
                 currentAccount= response.request.meta['redirect_urls'][0][len(self.base):]
+    
                 text[1]= text[1][:-1]
                 text[3]= text[3][:-1]
-                if color[0] == "color:#e53b00;" and color[3] == "color:#e53b00;":
+                if color[0] == "color:#e53b00;" and color[2] == "color:#e53b00;":
                     text[1]='-'+text[1]
                     text[3]= '-'+text[3]
-                elif color[0] == "color:#41a200;" and color[3] == "color:#e53b00;":
+                elif color[0] == "color:#41a200;" and color[2] == "color:#e53b00;":
                     text[1]= '-'+text[1]
                     text[3]= text[3]   
-                elif color[0] == "color:#e53b00;" and color[3] == "color:#41a200;":
+                elif color[0] == "color:#e53b00;" and color[2] == "color:#41a200;":
                     text[1]= text[1]
                     text[3]= '-'+text[3]  
                     
