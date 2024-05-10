@@ -42,14 +42,21 @@ def convert_to_number(s):
             
 def extract_values(text):
     # Find the index of the item with '%'
+    data= []
     index = next((i for i, s in enumerate(text) if '%' in s), None)
+    
+    print(index)
     if index is not None and index > 0:
         # If found and it's not the first item, return the item and the one before it
-        return [text[index - 1], text[index]]
+        data.append(text[index - 1])
+        data.append(text[index])
+        data.append(text[-7])
+        data.append(text[-6])
+        
     else:
         # If not found or it's the first item, return None
-        return [None, None]
-
+        return [None, None,None, None]
+    return data
 # Usage:            
 class BlogSpider(scrapy.Spider):  
     
@@ -65,10 +72,12 @@ class BlogSpider(scrapy.Spider):
             profiles = list(reader)
 
 
-        with open('data\output2024-05-08-225040.csv', 'r', encoding='utf-8') as file:
+        with open('data\output2024-05-09210054.csv', 'r', encoding='utf-8') as file:
             reader = csv.reader(file)
             data = list(reader)
+            print(data[0])
             for row in data[1:]:
+                print(row)
                 booler = checkProfile(row[4],profiles)
                 if not booler:
                     self.start_urls.append(self.base+(row[4]))
@@ -82,31 +91,40 @@ class BlogSpider(scrapy.Spider):
             
             subscribers = convert_to_number(subscribers.strip())
         try:
-            for title in response.css('#socialblade-user-content > div:nth-child(3) > div:nth-child(1)>p:nth-child(1)'):
+            for title in response.css('#socialblade-user-content > div:nth-child(3) '):
                 text=  title.css('::text').extract()
                 data= []
                 text = extract_values(text)
+                print('texttext',text)
                 text[0] = text[0].strip()  # Remove leading and trailing whitespace
+                text[2] = text[2].strip()
                 newsubscribers = convert_to_number(text[0])
+                newviews = convert_to_number(text[2])
                 color= title.css('sup>span::attr(style)').extract()
+                print('color',color)
                 currentAccount= response.request.meta['redirect_urls'][0][len(self.base):]
                 text[1]= text[1][:-1]
-                if color[0] == "color:#e53b00;":
+                text[3]= text[3][:-1]
+                if color[0] == "color:#e53b00;" and color[3] == "color:#e53b00;":
                     text[1]='-'+text[1]
-                    print(currentAccount,subscribers,newsubscribers,text[1])
-                    data.append((currentAccount,subscribers,newsubscribers,text[1]))
-                else:
-                    data.append((currentAccount,subscribers,newsubscribers,text[1]))
-                yield self.addProfile([currentAccount,subscribers,newsubscribers,text[1]])
+                    text[3]= '-'+text[3]
+                elif color[0] == "color:#41a200;" and color[3] == "color:#e53b00;":
+                    text[1]= '-'+text[1]
+                    text[3]= text[3]   
+                elif color[0] == "color:#e53b00;" and color[3] == "color:#41a200;":
+                    text[1]= text[1]
+                    text[3]= '-'+text[3]  
+                    
+                yield self.addProfile([currentAccount,subscribers,newsubscribers,text[1],newviews,text[3]])
         except:
             currentAccount= response.request.meta['redirect_urls'][0][len(self.base):]
-            yield self.addProfile([currentAccount,subscribers,0,0])
+            yield self.addProfile([currentAccount,subscribers,0,0,0,0])
     
     
     def addProfile(self, profile):
         with open('data\profiles\profiles2024-5.csv', 'a',newline='', encoding='utf-8') as file:
             writer = csv.writer(file)
-            writer.writerow([profile[0],profile[1],profile[2],profile[3]])
+            writer.writerow([profile[0],profile[1],profile[2],profile[3],profile[4],profile[5]])
 
 
 

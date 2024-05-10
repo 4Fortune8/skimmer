@@ -53,13 +53,25 @@ driver.execute_script("window.scrollTo(0, 100000);")
 time.sleep(.5)  # Wait for 3 seconds
 driver.execute_script("window.scrollTo(0, 100000);")
 
-time.sleep(.5)  # Wait for 3 seconds
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 100000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 100000);")
+
+time.sleep(.8)  # Wait for 3 seconds
 driver.execute_script("window.scrollTo(0, 100000);")
 
 time.sleep(.5)  # Wait for 3 seconds
 driver.execute_script("window.scrollTo(0, 100000);")
 
-time.sleep(.5)  # Wait for 3 seconds
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 100000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 100000);")
+
+time.sleep(.8)  # Wait for 3 seconds
 driver.execute_script("window.scrollTo(0, 100000);")
 
 time.sleep(.5)  # Wait for 3 seconds
@@ -99,5 +111,8 @@ with open('data/output'+savetime+'.csv',  'w', newline='', encoding='utf-8') as 
 
     # Write the data
     for data in dataset:
-        writer.writerow(data)
+        if len(data) == 5:
+            writer.writerow(data)
+        else:
+            print(len(data))
     driver.close()
