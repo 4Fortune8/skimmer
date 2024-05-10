@@ -75,9 +75,7 @@ class BlogSpider(scrapy.Spider):
         with open('data\output2024-05-09210054.csv', 'r', encoding='utf-8') as file:
             reader = csv.reader(file)
             data = list(reader)
-            print(data[0])
             for row in data[1:]:
-                print(row)
                 booler = checkProfile(row[4],profiles)
                 if not booler:
                     self.start_urls.append(self.base+(row[4]))
@@ -93,15 +91,12 @@ class BlogSpider(scrapy.Spider):
         try:
             for title in response.css('#socialblade-user-content > div:nth-child(3) '):
                 text=  title.css('::text').extract()
-                data= []
                 text = extract_values(text)
-                print('texttext',text)
                 text[0] = text[0].strip()  # Remove leading and trailing whitespace
                 text[2] = text[2].strip()
                 newsubscribers = convert_to_number(text[0])
                 newviews = convert_to_number(text[2])
                 color= title.css('sup>span::attr(style)').extract()
-                print('color',color)
                 currentAccount= response.request.meta['redirect_urls'][0][len(self.base):]
                 text[1]= text[1][:-1]
                 text[3]= text[3][:-1]
