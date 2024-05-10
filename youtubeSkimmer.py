@@ -29,6 +29,13 @@ driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scr
 time.sleep(3)  # Wait for 3 seconds
 scrollable_element = driver.find_element(By.CSS_SELECTOR, "html body ytd-app div#content.style-scope.ytd-app ytd-page-manager#page-manager.style-scope.ytd-app ytd-shorts.style-scope.ytd-page-manager div#shorts-container.style-scope.ytd-shorts")
 driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
+time.sleep(3)  # Wait for 3 seconds
+scrollable_element = driver.find_element(By.CSS_SELECTOR, "html body ytd-app div#content.style-scope.ytd-app ytd-page-manager#page-manager.style-scope.ytd-app ytd-shorts.style-scope.ytd-page-manager div#shorts-container.style-scope.ytd-shorts")
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
+
+time.sleep(3)  # Wait for 3 seconds
+scrollable_element = driver.find_element(By.CSS_SELECTOR, "html body ytd-app div#content.style-scope.ytd-app ytd-page-manager#page-manager.style-scope.ytd-app ytd-shorts.style-scope.ytd-page-manager div#shorts-container.style-scope.ytd-shorts")
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
 
 time.sleep(3)  # Wait for 3 seconds
 
@@ -36,7 +43,8 @@ driver.find_element(By.CSS_SELECTOR, ".ytd-mini-guide-renderer:nth-child(1) > #e
 # Iterate over the elements and get their CSS data
 driver.refresh()
 time.sleep(3)  # Wait for 3 seconds
-
+scrollable_element = driver.find_element(By.CSS_SELECTOR, "html body ytd-app div#content.style-scope.ytd-app ytd-page-manager#page-manager.style-scope.ytd-app ytd-shorts.style-scope.ytd-page-manager div#shorts-container.style-scope.ytd-shorts")
+driver.find_element(By.CSS_SELECTOR, "div.ytd-rich-grid-renderer:nth-child(6)")
 driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
 
 time.sleep(.5)  # Wait for 3 seconds
