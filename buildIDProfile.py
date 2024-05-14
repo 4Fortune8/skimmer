@@ -45,7 +45,7 @@ def extract_values(text):
     data= []
     index = next((i for i, s in enumerate(text) if '%' in s), None)
     
-    print(index)
+
     if index is not None and index > 0:
         # If found and it's not the first item, return the item and the one before it
         data.append(text[index - 1])
@@ -72,7 +72,7 @@ class BlogSpider(scrapy.Spider):
             profiles = list(reader)
 
 
-        with open('data\output2024-05-09210054.csv', 'r', encoding='utf-8') as file:
+        with open('data\output2024-05-10110914.csv', 'r', encoding='utf-8') as file:
             reader = csv.reader(file)
             data = list(reader)
             for row in data[1:]:

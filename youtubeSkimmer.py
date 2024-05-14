@@ -29,11 +29,27 @@ driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scr
 time.sleep(3)  # Wait for 3 seconds
 scrollable_element = driver.find_element(By.CSS_SELECTOR, "html body ytd-app div#content.style-scope.ytd-app ytd-page-manager#page-manager.style-scope.ytd-app ytd-shorts.style-scope.ytd-page-manager div#shorts-container.style-scope.ytd-shorts")
 driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
-time.sleep(3)  # Wait for 3 seconds
+time.sleep(1)  # Wait for 3 seconds
+scrollable_element = driver.find_element(By.CSS_SELECTOR, "html body ytd-app div#content.style-scope.ytd-app ytd-page-manager#page-manager.style-scope.ytd-app ytd-shorts.style-scope.ytd-page-manager div#shorts-container.style-scope.ytd-shorts")
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
+
+time.sleep(1)  # Wait for 3 seconds
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
+time.sleep(3)  # Wait for 3 secondstime.sleep(3)  # Wait for 3 seconds
 scrollable_element = driver.find_element(By.CSS_SELECTOR, "html body ytd-app div#content.style-scope.ytd-app ytd-page-manager#page-manager.style-scope.ytd-app ytd-shorts.style-scope.ytd-page-manager div#shorts-container.style-scope.ytd-shorts")
 driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
 
 time.sleep(3)  # Wait for 3 seconds
+scrollable_element = driver.find_element(By.CSS_SELECTOR, "html body ytd-app div#content.style-scope.ytd-app ytd-page-manager#page-manager.style-scope.ytd-app ytd-shorts.style-scope.ytd-page-manager div#shorts-container.style-scope.ytd-shorts")
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
+time.sleep(1)  # Wait for 3 seconds
+scrollable_element = driver.find_element(By.CSS_SELECTOR, "html body ytd-app div#content.style-scope.ytd-app ytd-page-manager#page-manager.style-scope.ytd-app ytd-shorts.style-scope.ytd-page-manager div#shorts-container.style-scope.ytd-shorts")
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
+
+time.sleep(1)  # Wait for 3 seconds
+driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
+time.sleep(3)  # Wait for 3 seconds
+
 scrollable_element = driver.find_element(By.CSS_SELECTOR, "html body ytd-app div#content.style-scope.ytd-app ytd-page-manager#page-manager.style-scope.ytd-app ytd-shorts.style-scope.ytd-page-manager div#shorts-container.style-scope.ytd-shorts")
 driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scrollable_element)
 
@@ -66,15 +82,25 @@ time.sleep(.5)  # Wait for 3 seconds
 driver.execute_script("window.scrollTo(0, 100000);")
 
 time.sleep(.8)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
+driver.execute_script("window.scrollTo(0, 200000);")
 
 time.sleep(.8)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
+driver.execute_script("window.scrollTo(0, 200000);")
 
 time.sleep(.8)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
+driver.execute_script("window.scrollTo(0, 200000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 200000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 200000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 200000);")
 
 time.sleep(.5)  # Wait for 3 seconds
+
 
 # Close the driver
 
