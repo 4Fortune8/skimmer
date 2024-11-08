@@ -67,22 +67,25 @@ class BlogSpider(scrapy.Spider):
         self.start_urls =[]
         self.profiles = []
         
-        with open('data\profiles\profiles2024-5.csv', 'r', encoding='utf-8') as file:
+        with open('data\\profiles\\profiles2024-10.csv', 'r', encoding='utf-8') as file:
             reader = csv.reader(file)
             profiles = list(reader)
 
 
-        with open('data\output2024-05-10110914.csv', 'r', encoding='utf-8') as file:
+        with open('data\\output2024-10-14162510.csv', 'r', encoding='utf-8') as file:
             reader = csv.reader(file)
             data = list(reader)
             for row in data[1:]:
                 booler = checkProfile(row[4],profiles)
-                if not booler:
-                    self.start_urls.append(self.base+(row[4]))
+                if not booler: 
+                    if row[4][0] == '@':
+                        self.start_urls.append(self.base+(row[4][1:]))
+                    else:
+                        self.start_urls.append(self.base+(row[4]))
 
     
     def parse(self, response):
-        time.sleep(10)
+        time.sleep(20)
         # Extract data from the new CSS selector
         for element in response.css('div.YouTubeUserTopInfo:nth-child(3) > span:nth-child(3)'):
             subscribers = element.css('::text').extract_first().strip()
@@ -117,7 +120,7 @@ class BlogSpider(scrapy.Spider):
     
     
     def addProfile(self, profile):
-        with open('data\profiles\profiles2024-5.csv', 'a',newline='', encoding='utf-8') as file:
+        with open('data\\profiles\\profiles2024-10.csv', 'a',newline='', encoding='utf-8') as file:
             writer = csv.writer(file)
             writer.writerow([profile[0],profile[1],profile[2],profile[3],profile[4],profile[5]])
 

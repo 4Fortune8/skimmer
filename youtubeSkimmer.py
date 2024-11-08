@@ -10,6 +10,10 @@ from selenium.webdriver.support import expected_conditions as EC
 import time
 
 # Initialize the Firefox webdriver
+ 
+
+
+
 driver = webdriver.Firefox()
 
 # Navigate to the webpage
@@ -17,7 +21,7 @@ driver.get('https://www.youtube.com')
 
 # Find all elements with the class name 'ytd-video-meta-block'
 wait = WebDriverWait(driver, 10)
-element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "html body ytd-app div#content.style-scope.ytd-app ytd-mini-guide-renderer.style-scope.ytd-app div#items.style-scope.ytd-mini-guide-renderer ytd-mini-guide-entry-renderer.style-scope.ytd-mini-guide-renderer a#endpoint.yt-simple-endpoint.style-scope.ytd-mini-guide-entry-renderer yt-icon#icon.guide-icon.style-scope.ytd-mini-guide-entry-renderer yt-icon-shape.style-scope.yt-icon icon-shape.yt-spec-icon-shape div")))
+element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "ytd-mini-guide-entry-renderer.style-scope:nth-child(2) > a:nth-child(1)")))
 
 
 driver.find_element(By.CSS_SELECTOR, ".ytd-mini-guide-renderer:nth-child(2) > #endpoint").click()
@@ -57,7 +61,25 @@ time.sleep(3)  # Wait for 3 seconds
 
 driver.find_element(By.CSS_SELECTOR, ".ytd-mini-guide-renderer:nth-child(1) > #endpoint").click()
 # Iterate over the elements and get their CSS data
+time.sleep(3)  # Wait for 3 seconds
+
+driver.find_element(By.CSS_SELECTOR, ".ytd-mini-guide-renderer:nth-child(2) > #endpoint").click()
+
+time.sleep(3)  # Wait for 3 seconds
+driver.find_element(By.CSS_SELECTOR, ".ytd-mini-guide-renderer:nth-child(1) > #endpoint").click()
+time.sleep(3)  # Wait for 3 seconds
+
+driver.find_element(By.CSS_SELECTOR, ".ytd-mini-guide-renderer:nth-child(1) > #endpoint").click()
+# Iterate over the elements and get their CSS data
+time.sleep(3)  # Wait for 3 seconds
+
+driver.find_element(By.CSS_SELECTOR, ".ytd-mini-guide-renderer:nth-child(2) > #endpoint").click()
+
+time.sleep(3)  # Wait for 3 seconds
+driver.find_element(By.CSS_SELECTOR, ".ytd-mini-guide-renderer:nth-child(1) > #endpoint").click()
+
 driver.refresh()
+
 time.sleep(3)  # Wait for 3 seconds
 driver.execute_script("window.scrollTo(0, 1000);")
 
@@ -105,21 +127,94 @@ time.sleep(.5)  # Wait for 3 seconds
 # Close the driver
 
 
-elements = driver.find_elements(By.CSS_SELECTOR,"ytd-rich-grid-row.style-scope > div > ytd-rich-item-renderer> div > ytd-rich-grid-media:nth-child(1) > div:nth-child(1) > div:nth-child(3) ")
+
+elements = driver.find_elements(By.CSS_SELECTOR,"ytd-rich-item-renderer.ytd-rich-grid-renderer")
+
 dataset = []
 print(len(elements))
 for element in elements:
     # Get the outer HTML of the element
-    text = element.text
-    text_array = text.splitlines()
-
-    child_element = element.find_element(By.CSS_SELECTOR,"div:nth-child(3)  > a")
-    link = child_element.get_attribute('href')
+    
     try:
-        text_array.append(link[25:])
+        text = element.text
+        text_array = text.splitlines()
+
+        child_element = element.find_element(By.CSS_SELECTOR,"* > div:nth-child(1) > ytd-rich-grid-media:nth-child(1) > div:nth-child(1) > div:nth-child(3) > div:nth-child(1) > a:nth-child(1)")
+        link = child_element.get_attribute('href')
+        text_array.append(link.rsplit('/', 1)[-1])
         dataset.append(text_array)
     except:
         continue
+
+
+
+
+driver.refresh()
+
+time.sleep(3)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 1000);")
+
+time.sleep(.5)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 100000);")
+time.sleep(.5)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 100000);")
+
+time.sleep(.5)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 100000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 100000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 100000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 100000);")
+
+time.sleep(.5)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 100000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 200000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 200000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 200000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 200000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 200000);")
+
+time.sleep(.8)  # Wait for 3 seconds
+driver.execute_script("window.scrollTo(0, 200000);")
+
+time.sleep(.5)  # Wait for 3 seconds
+
+
+elements = driver.find_elements(By.CSS_SELECTOR,"ytd-rich-item-renderer.ytd-rich-grid-renderer")
+
+dataset = []
+print(len(elements))
+for element in elements:
+    # Get the outer HTML of the element
+    
+    try:
+        text = element.text
+        text_array = text.splitlines()
+
+        child_element = element.find_element(By.CSS_SELECTOR,"* > div:nth-child(1) > ytd-rich-grid-media:nth-child(1) > div:nth-child(1) > div:nth-child(3) > div:nth-child(1) > a:nth-child(1)")
+        link = child_element.get_attribute('href')
+        text_array.append(link.rsplit('/', 1)[-1])
+        dataset.append(text_array)
+    except:
+        continue
+
+
+
 
 
 import csv
