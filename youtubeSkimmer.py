@@ -60,7 +60,7 @@ driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight;', scr
 time.sleep(3)  # Wait for 3 seconds
 
 driver.find_element(By.CSS_SELECTOR, ".ytd-mini-guide-renderer:nth-child(1) > #endpoint").click()
-# Iterate over the elements and get their CSS data
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        # Iterate over the elements and get their CSS dat``````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````a
 time.sleep(3)  # Wait for 3 seconds
 
 driver.find_element(By.CSS_SELECTOR, ".ytd-mini-guide-renderer:nth-child(2) > #endpoint").click()
@@ -108,7 +108,7 @@ driver.execute_script("window.scrollTo(0, 200000);")
 
 time.sleep(.8)  # Wait for 3 seconds
 driver.execute_script("window.scrollTo(0, 200000);")
-
+    
 time.sleep(.8)  # Wait for 3 seconds
 driver.execute_script("window.scrollTo(0, 200000);")
 

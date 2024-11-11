@@ -4,6 +4,11 @@ import csv
 from scrapy.crawler import CrawlerProcess
 from bs4 import BeautifulSoup, Tag
 import time
+
+profilesData = 'data\\profiles\\profiles2024-11.csv'
+profilesids = 'data\\profiles\\profilesids2024-11.csv'
+        
+        
 def print_css_tree(html):
     soup = BeautifulSoup(html, 'html.parser')
 
@@ -66,13 +71,13 @@ class BlogSpider(scrapy.Spider):
         self.base= 'https://vidiq.com/youtube-stats/channel/'
         self.start_urls =[]
         self.profiles = []
-        
-        with open('data\\profiles\\profiles2024-10.csv', 'r', encoding='utf-8') as file:
+
+        with open(profilesData, 'r', encoding='utf-8') as file:
             reader = csv.reader(file)
             profiles = list(reader)
 
 
-        with open('data\\profiles\\profilesids2024-10.csv', 'r', encoding='utf-8') as file:
+        with open(profilesids, 'r', encoding='utf-8') as file:
             reader = csv.reader(file)
             data = list(reader)
             print(data[0])
@@ -102,17 +107,16 @@ class BlogSpider(scrapy.Spider):
         avgLength = element.css('div:nth-child(7)>div>div>p::text').get()
         try:
             subscribers = convert_to_number(subscribers)
+            earningsLow = convert_to_number(earnings[1])
+            earninghigh = convert_to_number(earnings[3])         
+            yield self.addProfile(currentAccount,subscribers,''.join(subscribersChange[:2]),view,''.join(viewChange[:2]),earningsLow, earninghigh,engagment,uploadFrequency,avgLength,page)
         except:
-            subscribers = convert_to_number(subscribers)
-        view = convert_to_number(view)
-        earningsLow = convert_to_number(earnings[1])
-        earninghigh = convert_to_number(earnings[3])         
-        yield self.addProfile(currentAccount,subscribers,''.join(subscribersChange[:2]),view,''.join(viewChange[:2]),earningsLow, earninghigh,engagment,uploadFrequency,avgLength,page)
-
+            print("something is wrong here:", self.base+page)
+        
     
     
     def addProfile(self,currentAccount,suscribers,suscribersChange,view,viewChange,earningsLow, earninghigh,engagment,uploadFrequency,avgLength,page):
-        with open('data\\profiles\\profiles2024-10.csv', 'a',newline='', encoding='utf-8') as file:
+        with open(profilesData, 'a',newline='', encoding='utf-8') as file:
             writer = csv.writer(file)
             writer.writerow([currentAccount,suscribers,suscribersChange,view,viewChange,earningsLow, earninghigh,engagment,uploadFrequency,avgLength,page])
 
@@ -124,18 +128,18 @@ if __name__ == "__main__":
     })
     import csv
     import pandas as pd
+    headers = ['currentAccount','catagory', 'suscribers', 'suscribersChange', 'view', 'viewChange', 'earningsLow', 'earninghigh', 'engagment', 'uploadFrequency', 'avgLength','page','performanceData']
 
     # Load the CSV file into a DataFrame
-    df = pd.read_csv('data\\profiles\\profiles2024-10.csv')
+    df = pd.read_csv(profilesids)
 
     # Drop duplicate rows
     df = df.drop_duplicates()
-
     # Write the DataFrame back to the CSV file
-    df.to_csv('data\\profiles\\profiles2024-10.csv', index=False)
-    headers = ['currentAccount', 'suscribers', 'suscribersChange', 'view', 'viewChange', 'earningsLow', 'earninghigh', 'engagment', 'uploadFrequency', 'avgLength','page']
+    df.to_csv(profilesids, index=False)
 
-    with open('data\\profiles\\profiles2024-10.csv', 'r+', newline='', encoding='utf-8') as file:
+
+    with open(profilesData, 'r+', newline='', encoding='utf-8') as file:
         reader = csv.reader(file)
         first_row = next(reader, None)
         if first_row != headers:

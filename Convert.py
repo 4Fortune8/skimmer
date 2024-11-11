@@ -66,16 +66,29 @@ def extract_values(text):
 class BlogSpider(scrapy.Spider):  
     
     def __init__(self):
-        self.check = 'data\\eeee.csv'
-        self.store = 'data\\profiles\\profilesids2024-10 copy.csv'
+        import glob
         import pandas as pd
-        df = pd.read_csv(self.check)
+        # Define the path to the CSV files
+        csv_files_path = 'data/*.csv'
 
-        # Drop duplicate rows
-        df = df.drop_duplicates()
+        # Use glob to get all CSV files in the directory
+        csv_files = glob.glob(csv_files_path)
+
+        # Read each CSV file into a DataFrame and store them in a list
+        dataframes = [pd.read_csv(file) for file in csv_files]
+
+        # Concatenate all DataFrames into one
+        combined_df = pd.concat(dataframes, ignore_index=True)
+        combined_df = combined_df.drop_duplicates()
+        # Convert the combined DataFrame to a list of lists (including headers)
+        combined_list = combined_df.values.tolist()
+
+        # Optionally, you can include the headers as the first row
+        headers = combined_df.columns.tolist()
+        combined_list.insert(0, headers)
+        self.store = 'data\\profiles\\profilesids2024-11.csv'
 
         # Write the DataFrame back to the CSV file
-        df.to_csv(self.check, index=False)
         self.name = 'blogspider'
         self.base= 'https://www.youtube.com/@'
         self.start_urls =[]
@@ -86,16 +99,14 @@ class BlogSpider(scrapy.Spider):
             profiles = list(reader)
 
 
-        with open(self.check, 'r', encoding='utf-8') as file:
-            reader = csv.reader(file)
-            data = list(reader)
-            for row in data[1:]:
-                booler = checkProfile(row[4],profiles)
-                if not booler: 
-                    if row[4][0] == '@':
-                        self.start_urls.append(self.base+(row[4][1:]))
-                    else:
-                        self.addProfile(row[4],row[4])
+    
+        for row in combined_list[1:]:
+            booler = checkProfile(row[4],profiles)
+            if not booler: 
+                if row[4][0] == '@':
+                    self.start_urls.append(self.base+(row[4][1:]))
+                else:
+                    self.addProfile(row[4],row[4])
 
 
     def parse(self, response):
