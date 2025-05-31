@@ -1,3 +1,5 @@
+
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
@@ -5,20 +7,25 @@ from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
-
+from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+
 import time
 
+import os
 # Initialize the Firefox webdriver
  
 
+options = Options()
+options.set_preference("media.volume_scale", "0.0")
+options.headless = True
+driver = webdriver.Firefox(options=options)
 
 
-driver = webdriver.Firefox()
-
+print("Firefox driver initialized successfully.")
 # Navigate to the webpage
 driver.get('https://www.youtube.com')
-
 # Find all elements with the class name 'ytd-video-meta-block'
 wait = WebDriverWait(driver, 10)
 element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "ytd-mini-guide-entry-renderer.style-scope:nth-child(2) > a:nth-child(1)")))
@@ -158,8 +165,6 @@ time.sleep(.5)  # Wait for 3 seconds
 driver.execute_script("window.scrollTo(0, 100000);")
 time.sleep(.5)  # Wait for 3 seconds
 driver.execute_script("window.scrollTo(0, 100000);")
-
-time.sleep(.5)  # Wait for 3 seconds
 driver.execute_script("window.scrollTo(0, 100000);")
 
 time.sleep(.8)  # Wait for 3 seconds
@@ -223,8 +228,13 @@ savetime= datetime.now().strftime("%Y-%m-%d%H%M%S")
 # Define your headers
 headers = ["video_name", "chanel_display_name", "views", 'age', 'chanel_id']  # Replace with your actual headers
 
+saveDirectory = '/home/fortune/CodeProjects/skimmer/data'
+if not os.path.exists(saveDirectory):
+    os.mkdir(saveDirectory)
+    os.mkdir(saveDirectory+'/output')
+   
 # Open the CSV file in write mode
-with open('data/output'+savetime+'.csv',  'w', newline='', encoding='utf-8') as file:
+with open('data/output/'+savetime+'.csv',  'w', newline='', encoding='utf-8') as file:
     writer = csv.writer(file)
 
     # Write the headers

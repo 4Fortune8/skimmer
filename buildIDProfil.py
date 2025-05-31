@@ -4,10 +4,26 @@ import csv
 from scrapy.crawler import CrawlerProcess
 from bs4 import BeautifulSoup, Tag
 import time
+import datetime
+import os
 
-profilesData = 'data\\profiles\\profiles2024-11.csv'
-profilesids = 'data\\profiles\\profilesids2024-11.csv'
-        
+
+now_for_processed = datetime.datetime.now() # Use a consistent timestamp for directory           
+
+# Corrected path construction
+data_dir = "data"
+profiles_subdir = "profiles"
+profiles_dir_path = os.path.join(data_dir, profiles_subdir)
+
+# Ensure the profiles directory exists
+os.makedirs(profiles_dir_path, exist_ok=True)
+
+profilesData = os.path.join(profiles_dir_path, f'profiles{now_for_processed.year}-{now_for_processed.month}.csv')
+profilesids = os.path.join(profiles_dir_path, f'profilesids{now_for_processed.year}-{now_for_processed.month}.csv')
+
+print(f"Profiles data path: {profilesData}")
+print(f"Profiles IDs path: {profilesids}")
+
         
 def print_css_tree(html):
     soup = BeautifulSoup(html, 'html.parser')
@@ -26,11 +42,15 @@ def print_css_tree(html):
 
 def checkProfile(row,profiles):
     try:
+        # Ensure row is a string and profiles is a list of lists (of strings)
+        if not isinstance(row, str):
+            return False
         for sublist in profiles:
-            if row in sublist:
+            if isinstance(sublist, list) and row in sublist:
                 return True
         return False
-    except:
+    except Exception as e:
+        print(f"Error in checkProfile: {e}")
         return False
 
 def convert_to_number(s):
@@ -70,22 +90,35 @@ class BlogSpider(scrapy.Spider):
         self.name = 'blogspider'
         self.base= 'https://vidiq.com/youtube-stats/channel/'
         self.start_urls =[]
-        self.profiles = []
+        self.profiles = [] # This will store data from profilesData
+
+        # Ensure profilesData file exists before trying to read, create if not
+        if not os.path.exists(profilesData):
+            with open(profilesData, 'w', newline='', encoding='utf-8') as f:
+                pass # Creates an empty file
 
         with open(profilesData, 'r', encoding='utf-8') as file:
             reader = csv.reader(file)
-            profiles = list(reader)
+            self.profiles = list(reader) 
 
+
+        # Ensure profilesids file exists before trying to read, create if not
+        if not os.path.exists(profilesids):
+            with open(profilesids, 'w', newline='', encoding='utf-8') as f:
+                pass # Creates an empty file
 
         with open(profilesids, 'r', encoding='utf-8') as file:
             reader = csv.reader(file)
-            data = list(reader)
-            print(data[0])
-            for row in data:
-                print(row)
-                booler = checkProfile(row[0],profiles)
-                if not booler:
-                    self.start_urls.append(self.base+(row[0]))
+            data_ids = list(reader) # Renamed to avoid conflict with global 'data' if any
+            if data_ids: # Check if data_ids is not empty
+                print(f"First row of profile IDs: {data_ids[0]}")
+                for row_id in data_ids: # Renamed to avoid conflict
+                    if row_id: # Check if row_id is not empty
+                        booler = checkProfile(row_id[0], self.profiles)
+                        if not booler:
+                            self.start_urls.append(self.base+(row_id[0]))
+            else:
+                print(f"{profilesids} is empty or could not be read properly.")
 
     
     def parse(self, response):
@@ -130,28 +163,45 @@ if __name__ == "__main__":
     import pandas as pd
     headers = ['currentAccount','catagory', 'suscribers', 'suscribersChange', 'view', 'viewChange', 'earningsLow', 'earninghigh', 'engagment', 'uploadFrequency', 'avgLength','page','performanceData']
 
-    # Load the CSV file into a DataFrame
-    df = pd.read_csv(profilesids)
-
-    # Drop duplicate rows
-    df = df.drop_duplicates()
-    # Write the DataFrame back to the CSV file
-    df.to_csv(profilesids, index=False)
-
-
-    with open(profilesData, 'r+', newline='', encoding='utf-8') as file:
-        reader = csv.reader(file)
-        first_row = next(reader, None)
-        if first_row != headers:
-            # Move the file pointer to the beginning of the file
-            file.seek(0)
-            # Create a writer object
+    # Check and write headers for profilesData
+    if not os.path.exists(profilesData) or os.path.getsize(profilesData) == 0:
+        with open(profilesData, 'w', newline='', encoding='utf-8') as file:
             writer = csv.writer(file)
-            # Write the headers
             writer.writerow(headers)
-            # Write the original first row if it exists
-            if first_row:
-                writer.writerow(first_row)
+    else:
+        with open(profilesData, 'r+', newline='', encoding='utf-8') as file:
+            reader = csv.reader(file)
+            try:
+                first_row = next(reader)
+                if first_row != headers:
+                    file.seek(0)
+                    content = list(reader)
+                    file.seek(0)
+                    file.truncate()
+                    writer = csv.writer(file)
+                    writer.writerow(headers)
+                    if first_row:
+                        writer.writerow(first_row)
+                    writer.writerows(content)
+            except StopIteration:
+                file.seek(0)
+                writer = csv.writer(file)
+                writer.writerow(headers)
+
+    # De-duplicate profilesids before crawling
+    if os.path.exists(profilesids) and os.path.getsize(profilesids) > 0:
+        try:
+            df_ids = pd.read_csv(profilesids, header=None, names=['profile_id', 'originalName'])
+            df_ids_deduplicated = df_ids.drop_duplicates()
+            df_ids_deduplicated.to_csv(profilesids, index=False, header=False)
+            print(f"De-duplicated {profilesids}")
+        except pd.errors.EmptyDataError:
+            print(f"{profilesids} is empty, skipping de-duplication.")
+        except Exception as e:
+            print(f"Error de-duplicating {profilesids}: {e}")
+    else:
+        print(f"{profilesids} does not exist or is empty. Skipping de-duplication.")
+
     process.crawl(BlogSpider)
     process.start() # the script will block here until the crawling is finished
 
