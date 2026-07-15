@@ -138,7 +138,10 @@ class BlogSpider(scrapy.Spider):
         engagment = element.css('div:nth-child(5)>div>div>p::text').get()
         uploadFrequency = element.css('div:nth-child(6)>div>div>p::text').get()
         avgLength = element.css('div:nth-child(7)>div>div>p::text').get()
+        if subscribers != None:
+            print("No subscribers found for:", self.base+page)
         try:
+            view = convert_to_number(view)
             subscribers = convert_to_number(subscribers)
             earningsLow = convert_to_number(earnings[1])
             earninghigh = convert_to_number(earnings[3])         
@@ -161,7 +164,7 @@ if __name__ == "__main__":
     })
     import csv
     import pandas as pd
-    headers = ['currentAccount','catagory', 'suscribers', 'suscribersChange', 'view', 'viewChange', 'earningsLow', 'earninghigh', 'engagment', 'uploadFrequency', 'avgLength','page','performanceData']
+    headers = ['currentAccount','suscribers', 'suscribersChange', 'view', 'viewChange', 'earningsLow', 'earninghigh', 'engagment', 'uploadFrequency', 'avgLength','page']
 
     # Check and write headers for profilesData
     if not os.path.exists(profilesData) or os.path.getsize(profilesData) == 0:
