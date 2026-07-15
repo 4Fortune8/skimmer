@@ -20,6 +20,8 @@ import subprocess
 import tarfile
 import urllib.request
 from pathlib import Path
+
+from bronze_store import insert_youtube_skimmed
 # Initialize the Firefox webdriver
  
 
@@ -370,34 +372,20 @@ for element in elements:
 
 
 
-import csv
-from datetime import datetime
-savetime= datetime.now().strftime("%Y-%m-%d%H%M%S")
-# Define your headers
-headers = ["video_name", "chanel_display_name", "views", 'age', 'chanel_id']  # Replace with your actual headers
+bronze_records = []
+for data in dataset:
+    if len(data) == 5:
+        bronze_records.append(
+            {
+                "video_name": data[0],
+                "channel_display_name": data[1],
+                "views": data[2],
+                "age": data[3],
+                "channel_id": data[4],
+            }
+        )
+    else:
+        print(len(data))
 
-saveDirectory = os.environ.get(
-    "YOUTUBE_SAVE_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"),
-)
-os.makedirs(os.path.join(saveDirectory, "output"), exist_ok=True)
-   
-# Open the CSV file in write mode
-with open(
-    os.path.join(saveDirectory, "output", savetime + ".csv"),
-    'w',
-    newline='',
-    encoding='utf-8',
-) as file:
-    writer = csv.writer(file)
-
-    # Write the headers
-    writer.writerow(headers)
-
-    # Write the data
-    for data in dataset:
-        if len(data) == 5:
-            writer.writerow(data)
-        else:
-            print(len(data))
-    driver.close()
+insert_youtube_skimmed(bronze_records, "youtube.com")
+driver.close()

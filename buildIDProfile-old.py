@@ -1,8 +1,12 @@
 import scrapy
-import csv
 from scrapy.crawler import CrawlerProcess
 from bs4 import BeautifulSoup, Tag
 import time
+
+from bronze_store import (
+    get_unprocessed_youtube_channel_ids,
+    insert_socialblade_channel_stats,
+)
 def print_css_tree(html):
     soup = BeautifulSoup(html, 'html.parser')
 
@@ -65,23 +69,10 @@ class BlogSpider(scrapy.Spider):
         self.name = 'blogspider'
         self.base= 'https://socialblade.com/youtube/c/@'
         self.start_urls =[]
-        self.profiles = []
-        
-        with open('data\\profiles\\profiles2024-10.csv', 'r', encoding='utf-8') as file:
-            reader = csv.reader(file)
-            profiles = list(reader)
-
-
-        with open('data\\output2024-10-14162510.csv', 'r', encoding='utf-8') as file:
-            reader = csv.reader(file)
-            data = list(reader)
-            for row in data[1:]:
-                booler = checkProfile(row[4],profiles)
-                if not booler: 
-                    if row[4][0] == '@':
-                        self.start_urls.append(self.base+(row[4][1:]))
-                    else:
-                        self.start_urls.append(self.base+(row[4]))
+        for channel_id in get_unprocessed_youtube_channel_ids(
+            "bronze_socialblade_channel_stats"
+        ):
+            self.start_urls.append(self.base + channel_id.lstrip("@"))
 
     
     def parse(self, response):
@@ -120,9 +111,17 @@ class BlogSpider(scrapy.Spider):
     
     
     def addProfile(self, profile):
-        with open('data\\profiles\\profiles2024-10.csv', 'a',newline='', encoding='utf-8') as file:
-            writer = csv.writer(file)
-            writer.writerow([profile[0],profile[1],profile[2],profile[3],profile[4],profile[5]])
+        insert_socialblade_channel_stats(
+            {
+                "channel_id": profile[0],
+                "subscribers": profile[1],
+                "subscribers_change": profile[2],
+                "subscribers_change_percentage": profile[3],
+                "views_change": profile[4],
+                "views_change_percentage": profile[5],
+                "raw_profile": profile,
+            }
+        )
 
 
 
@@ -133,4 +132,3 @@ if __name__ == "__main__":
 
     process.crawl(BlogSpider)
     process.start() # the script will block here until the crawling is finished
-
