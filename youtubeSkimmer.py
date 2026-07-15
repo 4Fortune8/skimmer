@@ -9,18 +9,166 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.firefox.service import Service
 
 import time
 
 import os
+import platform
+import shutil
+import subprocess
+import tarfile
+import urllib.request
+from pathlib import Path
 # Initialize the Firefox webdriver
  
 
-options = Options()
-options.set_preference("media.volume_scale", "0.0")
-options.headless = True
-driver = webdriver.Firefox(options=options)
+def parse_bool_env(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    value = value.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be one of: 1/0, true/false, yes/no, on/off.")
+
+
+def resolve_geckodriver_path():
+    configured = os.environ.get("GECKODRIVER_PATH")
+    if configured:
+        path = Path(configured).expanduser()
+        if path.exists():
+            return str(path)
+        raise RuntimeError(f"GECKODRIVER_PATH does not exist: {path}")
+
+    installed = shutil.which("geckodriver")
+    if installed and not installed.startswith("/snap/"):
+        return installed
+
+    machine = platform.machine().lower()
+    if machine in {"aarch64", "arm64"}:
+        archive_name = "geckodriver-v0.37.0-linux-aarch64.tar.gz"
+    elif machine in {"x86_64", "amd64"}:
+        archive_name = "geckodriver-v0.37.0-linux64.tar.gz"
+    elif machine.startswith("armv7"):
+        archive_name = "geckodriver-v0.37.0-linux-arm7hf.tar.gz"
+    else:
+        raise RuntimeError(
+            f"Unsupported architecture for automatic geckodriver download: {machine}"
+        )
+
+    target_dir = Path(__file__).resolve().parent / ".drivers"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    driver_path = target_dir / "geckodriver"
+    if driver_path.exists():
+        driver_path.chmod(0o755)
+        return str(driver_path)
+
+    archive_path = target_dir / archive_name
+    download_url = (
+        "https://github.com/mozilla/geckodriver/releases/download/v0.37.0/"
+        + archive_name
+    )
+    urllib.request.urlretrieve(download_url, archive_path)
+    with tarfile.open(archive_path, "r:gz") as archive:
+        archive.extract("geckodriver", target_dir)
+    archive_path.unlink(missing_ok=True)
+    driver_path.chmod(0o755)
+    return str(driver_path)
+
+
+def is_usable_firefox_binary(path):
+    try:
+        result = subprocess.run(
+            [str(path), "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception:
+        return False
+    output = (result.stdout or "").lower()
+    if "snap-confine" in output or "requires the firefox snap" in output:
+        return False
+    return result.returncode == 0
+
+
+def resolve_firefox_binary_path():
+    configured = os.environ.get("FIREFOX_BINARY_PATH")
+    if configured:
+        configured_path = Path(configured).expanduser()
+        if configured_path.exists() and is_usable_firefox_binary(configured_path):
+            return str(configured_path)
+        raise RuntimeError(f"FIREFOX_BINARY_PATH is not usable: {configured_path}")
+
+    target_dir = Path(__file__).resolve().parent / ".drivers"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    local_binary = target_dir / "firefox" / "firefox"
+    candidates = [
+        local_binary,
+        Path("/usr/lib/firefox/firefox"),
+        Path("/usr/lib/firefox-esr/firefox"),
+    ]
+    system_firefox = shutil.which("firefox")
+    if system_firefox:
+        candidates.append(Path(system_firefox))
+
+    for candidate in candidates:
+        if candidate.exists() and is_usable_firefox_binary(candidate):
+            return str(candidate)
+
+    machine = platform.machine().lower()
+    if machine in {"aarch64", "arm64"}:
+        platform_key = "linux64-aarch64"
+    elif machine in {"x86_64", "amd64"}:
+        platform_key = "linux64"
+    else:
+        raise RuntimeError(
+            f"Unsupported architecture for automatic Firefox download: {machine}"
+        )
+
+    archive_path = target_dir / "firefox.tar.xz"
+    download_url = (
+        "https://download.mozilla.org/?product=firefox-latest-ssl"
+        f"&os={platform_key}&lang=en-US"
+    )
+    urllib.request.urlretrieve(download_url, archive_path)
+    if (target_dir / "firefox").exists():
+        shutil.rmtree(target_dir / "firefox")
+    with tarfile.open(archive_path, "r:xz") as archive:
+        archive.extractall(target_dir)
+    archive_path.unlink(missing_ok=True)
+
+    if local_binary.exists() and is_usable_firefox_binary(local_binary):
+        local_binary.chmod(0o755)
+        return str(local_binary)
+    raise RuntimeError("Downloaded Firefox binary is not usable in this environment.")
+
+
+def create_driver():
+    options = Options()
+    options.set_preference("media.volume_scale", "0.0")
+    options.binary_location = resolve_firefox_binary_path()
+    if parse_bool_env("YOUTUBE_HEADLESS", default=False):
+        options.add_argument("-headless")
+    try:
+        return webdriver.Firefox(
+            service=Service(resolve_geckodriver_path()),
+            options=options,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Unable to start Firefox WebDriver. Set GECKODRIVER_PATH and/or "
+            "FIREFOX_BINARY_PATH to valid binaries, or allow automatic downloads."
+        ) from exc
+
+
+driver = create_driver()
 
 
 print("Firefox driver initialized successfully.")
@@ -228,13 +376,19 @@ savetime= datetime.now().strftime("%Y-%m-%d%H%M%S")
 # Define your headers
 headers = ["video_name", "chanel_display_name", "views", 'age', 'chanel_id']  # Replace with your actual headers
 
-saveDirectory = '/home/fortune/CodeProjects/skimmer/data'
-if not os.path.exists(saveDirectory):
-    os.mkdir(saveDirectory)
-    os.mkdir(saveDirectory+'/output')
+saveDirectory = os.environ.get(
+    "YOUTUBE_SAVE_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"),
+)
+os.makedirs(os.path.join(saveDirectory, "output"), exist_ok=True)
    
 # Open the CSV file in write mode
-with open('data/output/'+savetime+'.csv',  'w', newline='', encoding='utf-8') as file:
+with open(
+    os.path.join(saveDirectory, "output", savetime + ".csv"),
+    'w',
+    newline='',
+    encoding='utf-8',
+) as file:
     writer = csv.writer(file)
 
     # Write the headers
