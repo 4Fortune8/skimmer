@@ -170,6 +170,97 @@ def create_driver():
         ) from exc
 
 
+def collect_youtube_feed():
+    """Render the YouTube homepage and persist its visible feed items."""
+    driver = create_driver()
+    driver.set_page_load_timeout(45)
+    try:
+        print("Firefox driver initialized successfully.")
+        driver.get("https://www.youtube.com")
+        WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located(
+                (
+                    By.CSS_SELECTOR,
+                    "ytd-mini-guide-entry-renderer:nth-child(2) > a",
+                )
+            )
+        )
+
+        driver.find_element(
+            By.CSS_SELECTOR,
+            "ytd-mini-guide-entry-renderer:nth-child(2) > a",
+        ).click()
+        shorts_container = WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "#shorts-container"))
+        )
+        for _ in range(10):
+            driver.execute_script(
+                "arguments[0].scrollTop = arguments[0].scrollHeight;",
+                shorts_container,
+            )
+            time.sleep(1)
+
+        driver.find_element(
+            By.CSS_SELECTOR,
+            "ytd-mini-guide-entry-renderer:nth-child(1) > a",
+        ).click()
+        WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, "ytd-rich-item-renderer")
+            )
+        )
+        for _ in range(10):
+            driver.execute_script(
+                "window.scrollTo(0, document.documentElement.scrollHeight);"
+            )
+            time.sleep(1)
+
+        records = driver.execute_script(
+            """
+            return Array.from(document.querySelectorAll('ytd-rich-item-renderer'))
+                .map((item) => {
+                    const channel = item.querySelector(
+                        'a[href*="/@"], a[href*="/channel/"], a[href*="/c/"], a[href*="/user/"]'
+                    );
+                    const lines = item.innerText
+                        .split('\\n')
+                        .map((line) => line.trim())
+                        .filter((line) => line && line !== '•');
+                    const viewsIndex = lines.findIndex(
+                        (line) => /\\bviews?\\b/i.test(line)
+                    );
+
+                    if (!channel || viewsIndex < 2 || !lines[viewsIndex + 1]) {
+                        return null;
+                    }
+
+                    const channelUrl = channel.href;
+                    const channelId = channelUrl.split('/').filter(Boolean).pop();
+                    return {
+                        video_name: lines[viewsIndex - 2],
+                        channel_display_name: lines[viewsIndex - 1],
+                        views: lines[viewsIndex],
+                        age: lines[viewsIndex + 1],
+                        channel_id: channelId,
+                    };
+                })
+                .filter(Boolean);
+            """
+        )
+        inserted = insert_youtube_skimmed(
+            records,
+            "https://www.youtube.com",
+        )
+        print(f"Stored {inserted} YouTube feed records.")
+    finally:
+        driver.quit()
+
+
+if __name__ == "__main__":
+    collect_youtube_feed()
+    raise SystemExit
+
+
 driver = create_driver()
 
 

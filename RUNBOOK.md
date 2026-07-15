@@ -8,9 +8,11 @@ Install the project’s collector dependencies in the Python environment:
 python -m pip install selenium scrapy beautifulsoup4
 ```
 
-`youtubeSkimmer.py` also requires Firefox and geckodriver. It automatically
-uses a configured `GECKODRIVER_PATH` or `FIREFOX_BINARY_PATH`; otherwise it
-uses an installed browser/driver or downloads them into `.drivers/`.
+The YouTube, vidIQ, and Social Blade collectors render pages with Firefox and
+geckodriver. `youtubeSkimmer.py` automatically uses a configured
+`GECKODRIVER_PATH` or `FIREFOX_BINARY_PATH`; otherwise it uses an installed
+browser/driver or downloads them into `.drivers/`. Configure those variables
+for the profile collectors when their default `.drivers` paths are unsuitable.
 
 ## Configure storage
 
@@ -47,6 +49,11 @@ collectors. Do not place the database in a directory served publicly.
    ```
 
 All collector output is written to SQLite. No CSV output is produced.
+
+Social Blade routes canonical YouTube channel IDs (`UC...`) as
+`/youtube/channel/<id>` and handles as `/youtube/handle/<handle>`.
+Run `SOCIALBLADE_HEADLESS=true python buildIDProfile-old.py` when a visible
+browser is not required.
 
 ## Inspect data
 

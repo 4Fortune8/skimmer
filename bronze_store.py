@@ -88,12 +88,32 @@ def initialize_database(database_path=None):
             );
             CREATE INDEX IF NOT EXISTS idx_bronze_socialblade_channel_stats_channel_id
                 ON bronze_socialblade_channel_stats(channel_id);
+
+            CREATE TABLE IF NOT EXISTS bronze_socialblade_daily_channel_metrics (
+                id INTEGER PRIMARY KEY,
+                create_dt TEXT NOT NULL,
+                ingested_at TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                metric_date TEXT NOT NULL,
+                subscribers_change,
+                subscribers_total,
+                views_change,
+                views_total,
+                videos_change,
+                videos_total,
+                earnings_low,
+                earnings_high,
+                raw_record_json TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_bronze_socialblade_daily_metrics_channel_date
+                ON bronze_socialblade_daily_channel_metrics(channel_id, metric_date);
             """
         )
         for table_name in (
             "bronze_youtube_skimmed",
             "bronze_vidiq_channel_stats",
             "bronze_socialblade_channel_stats",
+            "bronze_socialblade_daily_channel_metrics",
         ):
             columns = {
                 row[1]
@@ -240,3 +260,47 @@ def insert_socialblade_channel_stats(record, database_path=None):
                 json.dumps(record, ensure_ascii=False),
             ),
         )
+
+
+def insert_socialblade_daily_channel_metrics(records, database_path=None):
+    """Store rendered Social Blade daily channel metrics as raw bronze rows."""
+    records = list(records)
+    if not records:
+        return 0
+
+    create_dt = _ingested_at()
+    columns = (
+        "channel_id",
+        "metric_date",
+        "subscribers_change",
+        "subscribers_total",
+        "views_change",
+        "views_total",
+        "videos_change",
+        "videos_total",
+        "earnings_low",
+        "earnings_high",
+    )
+    rows = [
+        (
+            create_dt,
+            create_dt,
+            *(record[column] for column in columns),
+            json.dumps(record, ensure_ascii=False),
+        )
+        for record in records
+    ]
+    initialize_database(database_path)
+    with _connection(database_path) as connection:
+        connection.executemany(
+            """
+            INSERT INTO bronze_socialblade_daily_channel_metrics (
+                create_dt, ingested_at, channel_id, metric_date,
+                subscribers_change, subscribers_total, views_change, views_total,
+                videos_change, videos_total, earnings_low, earnings_high,
+                raw_record_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+    return len(rows)

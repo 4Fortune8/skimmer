@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import sqlite3
 import tempfile
 import unittest
@@ -7,10 +8,18 @@ from pathlib import Path
 from bronze_store import (
     get_unprocessed_youtube_channel_ids,
     initialize_database,
+    insert_socialblade_daily_channel_metrics,
     insert_socialblade_channel_stats,
     insert_vidiq_channel_stats,
     insert_youtube_skimmed,
 )
+
+SOCIALBLADE_MODULE_SPEC = importlib.util.spec_from_file_location(
+    "socialblade_collector",
+    Path(__file__).parents[1] / "buildIDProfile-old.py",
+)
+socialblade_collector = importlib.util.module_from_spec(SOCIALBLADE_MODULE_SPEC)
+SOCIALBLADE_MODULE_SPEC.loader.exec_module(socialblade_collector)
 
 
 class BronzeStoreTests(unittest.TestCase):
@@ -152,6 +161,64 @@ class BronzeStoreTests(unittest.TestCase):
             ).fetchone()[0]
 
         self.assertEqual(create_dt, "2026-07-15T00:00:00+00:00")
+
+    def test_socialblade_routes_and_only_accepts_rendered_change_values(self):
+        self.assertEqual(
+            socialblade_collector.socialblade_url("UClgRkhTL3_hImCAmdLfDE4g"),
+            "https://socialblade.com/youtube/channel/UClgRkhTL3_hImCAmdLfDE4g",
+        )
+        self.assertEqual(
+            socialblade_collector.socialblade_url("@mrbeast"),
+            "https://socialblade.com/youtube/handle/mrbeast",
+        )
+        self.assertIsNone(
+            socialblade_collector.value_before_label(
+                ["Subscribers for the last 30 days"],
+                "Subscribers for the last 30 days",
+            )
+        )
+        self.assertEqual(
+            socialblade_collector.value_before_label(
+                ["42K", "Subscribers for the last 30 days"],
+                "Subscribers for the last 30 days",
+            ),
+            "42K",
+        )
+
+    def test_socialblade_daily_metrics_retain_all_source_columns(self):
+        inserted = insert_socialblade_daily_channel_metrics(
+            [
+                {
+                    "channel_id": "UClgRkhTL3_hImCAmdLfDE4g",
+                    "metric_date": "2026-07-15",
+                    "subscribers_change": None,
+                    "subscribers_total": 141_000_000,
+                    "views_change": None,
+                    "views_total": 31_566_836_666,
+                    "videos_change": None,
+                    "videos_total": 459,
+                    "earnings_low": 0,
+                    "earnings_high": 0,
+                    "raw_row": ["Wed2026-07-15", "--", "141M"],
+                }
+            ],
+            self.database_path,
+        )
+
+        with sqlite3.connect(self.database_path) as connection:
+            row = connection.execute(
+                """
+                SELECT metric_date, subscribers_total, views_total, videos_total,
+                       earnings_low, earnings_high, create_dt
+                FROM bronze_socialblade_daily_channel_metrics
+                """
+            ).fetchone()
+
+        self.assertEqual(inserted, 1)
+        self.assertEqual(
+            row[:6], ("2026-07-15", 141_000_000, 31_566_836_666, 459, 0, 0)
+        )
+        self.assertTrue(row[6])
 
 
 if __name__ == "__main__":

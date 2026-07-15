@@ -1,134 +1,184 @@
-import scrapy
-from scrapy.crawler import CrawlerProcess
-from bs4 import BeautifulSoup, Tag
-import time
+import os
+import re
+from pathlib import Path
 
 from bronze_store import (
     get_unprocessed_youtube_channel_ids,
+    insert_socialblade_daily_channel_metrics,
     insert_socialblade_channel_stats,
 )
-def print_css_tree(html):
-    soup = BeautifulSoup(html, 'html.parser')
-
-    def recursive_print(tag, prefix="."):
-        if isinstance(tag, Tag):  # Check if tag is a BeautifulSoup Tag object
-            class_str = ".".join(tag.get('class', []))
-            print(f"{prefix}{tag.name}.{class_str}")
-            prefix += "  "
-            for child in tag.children:
-                recursive_print(child, prefix)
-                
-    recursive_print(soup)
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.firefox.service import Service
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.wait import WebDriverWait
 
 
+def convert_compact_number(value):
+    if value is None:
+        return None
 
-def checkProfile(row,profiles):
+    match = re.search(r"([\d,.]+)\s*([KMB]?)", value.upper())
+    if not match:
+        return value
+
+    number = float(match.group(1).replace(",", ""))
+    multiplier = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}[
+        match.group(2)
+    ]
+    return int(number * multiplier)
+
+
+def value_after_label(lines, label):
     try:
-        for sublist in profiles:
-            if row in sublist:
-                return True
-        return False
-    except:
-        return False
+        return lines[lines.index(label) + 1]
+    except ValueError:
+        return None
 
-def convert_to_number(s):
-            multipliers = {'K': 1000, 'M': 1000000, 'B': 1000000000}
-            # Check the last character of the string
-            if s[-1] in multipliers:
-                # If the last character is a multiplier, remove it from the string,
-                # convert the remaining string to a float, multiply by the appropriate value,
-                # and convert the result to an integer
-                return int(float(s[:-1]) * multipliers[s[-1]])
-            else:
-                # If the last character is not a multiplier, just convert the string to an integer
-                return int(s)
-            
-            
-def extract_values(text):
-    # Find the index of the item with '%'
-    data= []
-    index = next((i for i, s in enumerate(text) if '%' in s), None)
-    
 
-    if index is not None and index > 0:
-        # If found and it's not the first item, return the item and the one before it
-        data.append(text[index - 1])
-        data.append(text[index])
-        data.append(text[-7])
-        data.append(text[-6])
-        
-    else:
-        # If not found or it's the first item, return None
-        return [None, None,None, None]
-    return data
-# Usage:            
-class BlogSpider(scrapy.Spider):  
-    
-    def __init__(self):
-  
-        self.name = 'blogspider'
-        self.base= 'https://socialblade.com/youtube/c/@'
-        self.start_urls =[]
-        for channel_id in get_unprocessed_youtube_channel_ids(
-            "bronze_socialblade_channel_stats"
-        ):
-            self.start_urls.append(self.base + channel_id.lstrip("@"))
+def value_before_label(lines, label):
+    try:
+        index = lines.index(label)
+    except ValueError:
+        return None
+    if index == 0:
+        return None
 
-    
-    def parse(self, response):
-        time.sleep(20)
-        # Extract data from the new CSS selector
-        for element in response.css('div.YouTubeUserTopInfo:nth-child(3) > span:nth-child(3)'):
-            subscribers = element.css('::text').extract_first().strip()
-            subscribers = convert_to_number(subscribers.strip())
-        try:
-            for title in response.css('#socialblade-user-content > div:nth-child(3) '):
-                text=  title.css('::text').extract()
-                text = extract_values(text)
-                text[0] = text[0].strip()  # Remove leading and trailing whitespace
-                text[2] = text[2].strip()
-                newsubscribers = convert_to_number(text[0])
-                newviews = convert_to_number(text[2])
-                color= title.css('sup>span::attr(style)').extract()
-                currentAccount= response.request.meta['redirect_urls'][0][len(self.base):]
-    
-                text[1]= text[1][:-1]
-                text[3]= text[3][:-1]
-                if color[0] == "color:#e53b00;" and color[2] == "color:#e53b00;":
-                    text[1]='-'+text[1]
-                    text[3]= '-'+text[3]
-                elif color[0] == "color:#41a200;" and color[2] == "color:#e53b00;":
-                    text[1]= '-'+text[1]
-                    text[3]= text[3]   
-                elif color[0] == "color:#e53b00;" and color[2] == "color:#41a200;":
-                    text[1]= text[1]
-                    text[3]= '-'+text[3]  
-                    
-                yield self.addProfile([currentAccount,subscribers,newsubscribers,text[1],newviews,text[3]])
-        except:
-            currentAccount= response.request.meta['redirect_urls'][0][len(self.base):]
-            yield self.addProfile([currentAccount,subscribers,0,0,0,0])
-    
-    
-    def addProfile(self, profile):
-        insert_socialblade_channel_stats(
+    value = lines[index - 1]
+    if re.fullmatch(r"[-+]?[\d,.]+\s*[KMB]?", value.upper()):
+        return value
+    return None
+
+
+def socialblade_url(channel_id):
+    if channel_id.startswith("UC"):
+        return f"https://socialblade.com/youtube/channel/{channel_id}"
+    return f"https://socialblade.com/youtube/handle/{channel_id.lstrip('@')}"
+
+
+def nullable_value(value):
+    return None if value == "--" else value
+
+
+def parse_daily_metrics(channel_id, rows):
+    records = []
+    for row in rows:
+        if len(row) < 8:
+            continue
+
+        date_match = re.search(r"\d{4}-\d{2}-\d{2}", row[0])
+        if date_match is None:
+            continue
+
+        earnings = row[7].split(" - ")
+        records.append(
             {
-                "channel_id": profile[0],
-                "subscribers": profile[1],
-                "subscribers_change": profile[2],
-                "subscribers_change_percentage": profile[3],
-                "views_change": profile[4],
-                "views_change_percentage": profile[5],
-                "raw_profile": profile,
+                "channel_id": channel_id,
+                "metric_date": date_match.group(0),
+                "subscribers_change": convert_compact_number(nullable_value(row[1])),
+                "subscribers_total": convert_compact_number(nullable_value(row[2])),
+                "views_change": convert_compact_number(nullable_value(row[3])),
+                "views_total": convert_compact_number(nullable_value(row[4])),
+                "videos_change": convert_compact_number(nullable_value(row[5])),
+                "videos_total": convert_compact_number(nullable_value(row[6])),
+                "earnings_low": convert_compact_number(nullable_value(earnings[0])),
+                "earnings_high": convert_compact_number(
+                    nullable_value(earnings[1]) if len(earnings) == 2 else None
+                ),
+                "raw_row": row,
             }
         )
+    return records
 
+
+def create_driver():
+    options = Options()
+    options.set_preference("media.volume_scale", "0.0")
+    firefox_path = os.environ.get(
+        "FIREFOX_BINARY_PATH",
+        Path(__file__).resolve().parent / ".drivers" / "firefox" / "firefox",
+    )
+    geckodriver_path = os.environ.get(
+        "GECKODRIVER_PATH",
+        Path(__file__).resolve().parent / ".drivers" / "geckodriver",
+    )
+    options.binary_location = str(firefox_path)
+    if os.environ.get("SOCIALBLADE_HEADLESS", "").lower() in {"1", "true", "yes"}:
+        options.add_argument("-headless")
+    return webdriver.Firefox(service=Service(str(geckodriver_path)), options=options)
+
+
+def collect_socialblade_stats():
+    channel_ids = get_unprocessed_youtube_channel_ids(
+        "bronze_socialblade_channel_stats"
+    )
+    channel_limit = int(os.environ.get("SKIMMER_CHANNEL_LIMIT", "0"))
+    if channel_limit > 0:
+        channel_ids = channel_ids[:channel_limit]
+
+    driver = create_driver()
+    driver.set_page_load_timeout(60)
+    try:
+        for channel_id in channel_ids:
+            source_url = socialblade_url(channel_id)
+            driver.get(source_url)
+            WebDriverWait(driver, 30).until(
+                EC.presence_of_element_located(
+                    (By.XPATH, "//*[normalize-space()='Subscribers']")
+                )
+            )
+            lines = [
+                line.strip()
+                for line in driver.find_element(By.TAG_NAME, "body").text.splitlines()
+                if line.strip()
+            ]
+            subscribers = value_after_label(lines, "Subscribers")
+            creator_statistics_index = lines.index("CREATOR STATISTICS")
+            creator_statistics = lines[creator_statistics_index + 1 :]
+            subscribers_change = value_before_label(
+                creator_statistics, "Subscribers for the last 30 days"
+            )
+            views_change = value_before_label(
+                creator_statistics, "Views for the last 30 days"
+            )
+            daily_rows = driver.execute_script(
+                """
+                const table = Array.from(document.querySelectorAll('table')).find(
+                    (candidate) => candidate.innerText.startsWith(
+                        'Date\\tSubscribers\\tViews\\tVideos\\tEstimated Earnings'
+                    )
+                );
+                if (!table) {
+                    return [];
+                }
+                return Array.from(table.rows)
+                    .slice(1)
+                    .map((row) =>
+                        Array.from(row.cells).map((cell) => cell.innerText.trim())
+                    );
+                """
+            )
+            insert_socialblade_channel_stats(
+                {
+                    "channel_id": channel_id,
+                    "subscribers": convert_compact_number(subscribers),
+                    "subscribers_change": convert_compact_number(subscribers_change),
+                    "subscribers_change_percentage": None,
+                    "views_change": convert_compact_number(views_change),
+                    "views_change_percentage": None,
+                    "source_url": source_url,
+                    "raw_rendered_text": lines,
+                }
+            )
+            inserted_daily_metrics = insert_socialblade_daily_channel_metrics(
+                parse_daily_metrics(channel_id, daily_rows)
+            )
+            print(f"Stored Social Blade stats for {channel_id}.")
+            print(f"Stored {inserted_daily_metrics} Social Blade daily metric rows.")
+    finally:
+        driver.quit()
 
 
 if __name__ == "__main__":
-    process = CrawlerProcess({
-        'USER_AGENT': 'Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)'
-    })
-
-    process.crawl(BlogSpider)
-    process.start() # the script will block here until the crawling is finished
+    collect_socialblade_stats()

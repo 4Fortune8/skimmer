@@ -3,8 +3,17 @@ import scrapy
 from scrapy.crawler import CrawlerProcess
 from bs4 import BeautifulSoup, Tag
 import time
+import os
+import re
+from pathlib import Path
 
 from bronze_store import get_unprocessed_youtube_channel_ids, insert_vidiq_channel_stats
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.firefox.service import Service
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.wait import WebDriverWait
 
         
 def print_css_tree(html):
@@ -64,6 +73,96 @@ def extract_values(text):
         # If not found or it's the first item, return None
         return [None, None]
 
+
+def convert_compact_number(value):
+    if value is None:
+        return None
+
+    match = re.search(r"([\d,.]+)\s*([KMB]?)", value.upper())
+    if not match:
+        return value
+
+    number = float(match.group(1).replace(",", ""))
+    multiplier = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}[
+        match.group(2)
+    ]
+    return int(number * multiplier)
+
+
+def metric_value(lines, label):
+    try:
+        return lines[lines.index(label) + 1]
+    except ValueError:
+        return None
+
+
+def create_driver():
+    options = Options()
+    options.set_preference("media.volume_scale", "0.0")
+    firefox_path = os.environ.get(
+        "FIREFOX_BINARY_PATH",
+        Path(__file__).resolve().parent / ".drivers" / "firefox" / "firefox",
+    )
+    geckodriver_path = os.environ.get(
+        "GECKODRIVER_PATH",
+        Path(__file__).resolve().parent / ".drivers" / "geckodriver",
+    )
+    options.binary_location = str(firefox_path)
+    if os.environ.get("VIDIQ_HEADLESS", "").lower() in {"1", "true", "yes"}:
+        options.add_argument("-headless")
+    return webdriver.Firefox(service=Service(str(geckodriver_path)), options=options)
+
+
+def collect_vidiq_stats():
+    channel_ids = get_unprocessed_youtube_channel_ids(
+        "bronze_vidiq_channel_stats"
+    )
+    channel_limit = int(os.environ.get("SKIMMER_CHANNEL_LIMIT", "0"))
+    if channel_limit > 0:
+        channel_ids = channel_ids[:channel_limit]
+
+    driver = create_driver()
+    driver.set_page_load_timeout(60)
+    try:
+        for channel_id in channel_ids:
+            source_url = f"https://vidiq.com/youtube-stats/channel/{channel_id}"
+            driver.get(source_url)
+            WebDriverWait(driver, 30).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "h1"))
+            )
+            lines = [
+                line.strip()
+                for line in driver.find_element(By.TAG_NAME, "body").text.splitlines()
+                if line.strip()
+            ]
+            channel_name = (
+                driver.find_element(By.CSS_SELECTOR, "h1").text.strip().splitlines()[0]
+            )
+            subscribers = metric_value(lines, "Subscribers")
+            views = metric_value(lines, "Total Video Views")
+            earnings = metric_value(lines, "Est. Monthly Earnings")
+            insert_vidiq_channel_stats(
+                {
+                    "channel_name": channel_name,
+                    "subscribers": convert_compact_number(subscribers),
+                    "subscribers_change": None,
+                    "views": convert_compact_number(views),
+                    "views_change": None,
+                    "earnings_low": convert_compact_number(earnings),
+                    "earnings_high": None,
+                    "engagement": None,
+                    "upload_frequency": None,
+                    "average_length": None,
+                    "channel_id": channel_id,
+                    "source_url": source_url,
+                    "raw_rendered_text": lines,
+                }
+            )
+            print(f"Stored vidIQ stats for {channel_id}.")
+    finally:
+        driver.quit()
+
+
 # Usage:            
 class BlogSpider(scrapy.Spider):  
     
@@ -72,12 +171,13 @@ class BlogSpider(scrapy.Spider):
         self.name = 'blogspider'
         self.base= 'https://vidiq.com/youtube-stats/channel/'
         self.start_urls =[]
-        self.start_urls = [
-            self.base + channel_id
-            for channel_id in get_unprocessed_youtube_channel_ids(
-                "bronze_vidiq_channel_stats"
-            )
-        ]
+        channel_ids = get_unprocessed_youtube_channel_ids(
+            "bronze_vidiq_channel_stats"
+        )
+        channel_limit = int(os.environ.get("SKIMMER_CHANNEL_LIMIT", "0"))
+        if channel_limit > 0:
+            channel_ids = channel_ids[:channel_limit]
+        self.start_urls = [self.base + channel_id for channel_id in channel_ids]
 
     
     def parse(self, response):
@@ -127,8 +227,4 @@ class BlogSpider(scrapy.Spider):
 
 
 if __name__ == "__main__":
-    process = CrawlerProcess({
-        'USER_AGENT': 'Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)'
-    })
-    process.crawl(BlogSpider)
-    process.start() # the script will block here until the crawling is finished
+    collect_vidiq_stats()
