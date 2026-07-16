@@ -170,6 +170,62 @@ def create_driver():
         ) from exc
 
 
+def parse_int_env(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value.strip())
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer.") from exc
+    if parsed < 1:
+        raise ValueError(f"{name} must be >= 1.")
+    return parsed
+
+
+def scroll_home_feed(driver, steps=10, delay=1):
+    for _ in range(steps):
+        driver.execute_script(
+            "window.scrollTo(0, document.documentElement.scrollHeight);"
+        )
+        time.sleep(delay)
+
+
+def extract_home_records(driver):
+    return driver.execute_script(
+        """
+        return Array.from(document.querySelectorAll('ytd-rich-item-renderer'))
+            .map((item) => {
+                const channel = item.querySelector(
+                    'a[href*="/@"], a[href*="/channel/"], a[href*="/c/"], a[href*="/user/"]'
+                );
+                const lines = item.innerText
+                    .split('\\n')
+                    .map((line) => line.trim())
+                    .filter((line) => line && line !== '•');
+                const viewsIndex = lines.findIndex(
+                    (line) => /\\bviews?\\b/i.test(line)
+                );
+
+                if (!channel || viewsIndex < 2 || !lines[viewsIndex + 1]) {
+                    return null;
+                }
+
+                const channelUrl = channel.href;
+                const channelId = channelUrl.split('/').filter(Boolean).pop();
+                return {
+                    video_name: lines[viewsIndex - 2],
+                    channel_display_name: lines[viewsIndex - 1],
+                    views: lines[viewsIndex],
+                    age: lines[viewsIndex + 1],
+                    channel_id: channelId,
+                };
+            })
+            .filter(Boolean);
+        """
+    )
+
+
 def collect_youtube_feed():
     """Render the YouTube homepage and persist its visible feed items."""
     driver = create_driver()
@@ -209,44 +265,20 @@ def collect_youtube_feed():
                 (By.CSS_SELECTOR, "ytd-rich-item-renderer")
             )
         )
-        for _ in range(10):
-            driver.execute_script(
-                "window.scrollTo(0, document.documentElement.scrollHeight);"
-            )
-            time.sleep(1)
+        home_passes = parse_int_env("YOUTUBE_HOME_PASSES", default=3)
+        scroll_steps = parse_int_env("YOUTUBE_HOME_SCROLL_STEPS", default=10)
+        records = []
+        for pass_index in range(home_passes):
+            scroll_home_feed(driver, steps=scroll_steps, delay=1)
+            records.extend(extract_home_records(driver))
+            if pass_index < home_passes - 1:
+                driver.refresh()
+                WebDriverWait(driver, 30).until(
+                    EC.presence_of_element_located(
+                        (By.CSS_SELECTOR, "ytd-rich-item-renderer")
+                    )
+                )
 
-        records = driver.execute_script(
-            """
-            return Array.from(document.querySelectorAll('ytd-rich-item-renderer'))
-                .map((item) => {
-                    const channel = item.querySelector(
-                        'a[href*="/@"], a[href*="/channel/"], a[href*="/c/"], a[href*="/user/"]'
-                    );
-                    const lines = item.innerText
-                        .split('\\n')
-                        .map((line) => line.trim())
-                        .filter((line) => line && line !== '•');
-                    const viewsIndex = lines.findIndex(
-                        (line) => /\\bviews?\\b/i.test(line)
-                    );
-
-                    if (!channel || viewsIndex < 2 || !lines[viewsIndex + 1]) {
-                        return null;
-                    }
-
-                    const channelUrl = channel.href;
-                    const channelId = channelUrl.split('/').filter(Boolean).pop();
-                    return {
-                        video_name: lines[viewsIndex - 2],
-                        channel_display_name: lines[viewsIndex - 1],
-                        views: lines[viewsIndex],
-                        age: lines[viewsIndex + 1],
-                        channel_id: channelId,
-                    };
-                })
-                .filter(Boolean);
-            """
-        )
         inserted = insert_youtube_skimmed(
             records,
             "https://www.youtube.com",
@@ -332,7 +364,7 @@ time.sleep(3)  # Wait for 3 seconds
 driver.execute_script("window.scrollTo(0, 1000);")
 
 time.sleep(.5)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
+driver.execute_script("window.scrollTo(-1, 100000);")
 time.sleep(.5)  # Wait for 3 seconds
 driver.execute_script("window.scrollTo(0, 100000);")
 
@@ -395,69 +427,75 @@ for element in elements:
         continue
 
 
+def scroll_home_feed(driver, passes=5):
+    dataset = []
+    for _ in range(passes):
+
+        driver.refresh()
+
+        time.sleep(3)  # Wait for 3 seconds
+        driver.execute_script("window.scrollTo(0, 1000);")
+
+        time.sleep(.5)  # Wait for 3 seconds
+        driver.execute_script("window.scrollTo(0, 100000);")
+        time.sleep(.5)  # Wait for 3 seconds
+        driver.execute_script("window.scrollTo(0, 100000);")
+        driver.execute_script("window.scrollTo(0, 100000);")
+
+        time.sleep(.8)  # Wait for 3 seconds
+        driver.execute_script("window.scrollTo(0, 100000);")
+
+        time.sleep(.8)  # Wait for 3 seconds
+        driver.execute_script("window.scrollTo(0, 100000);")
+
+        time.sleep(.8)  # Wait for 3 seconds
+        driver.execute_script("window.scrollTo(0, 100000);")
+
+        time.sleep(.5)  # Wait for 3 seconds
+        driver.execute_script("window.scrollTo(0, 100000);")
+
+        time.sleep(.8)  # Wait for 3 seconds
+        driver.execute_script("window.scrollTo(0, 200000);")
+
+        time.sleep(.8)  # Wait for 3 seconds
+        driver.execute_script("window.scrollTo(0, 200000);")
+
+        time.sleep(.8)  # Wait for 3 seconds
+        driver.execute_script("window.scrollTo(0, 200000);")
+
+        time.sleep(.8)  # Wait for 3 seconds
+        driver.execute_script("window.scrollTo(0, 200000);")
+
+        time.sleep(.8)  # Wait for 3 seconds
+        driver.execute_script("window.scrollTo(0, 200000);")
+
+        time.sleep(.8)  # Wait for 3 seconds
+        driver.execute_script("window.scrollTo(0, 200000);")
+
+        time.sleep(.5)  # Wait for 3 seconds
 
 
-driver.refresh()
+        elements = driver.find_elements(
+            By.CSS_SELECTOR,
+            "ytd-rich-item-renderer.ytd-rich-grid-renderer",
+        )
+        for element in elements:
+            try:
+                text = element.text
+                text_array = text.splitlines()
+                child_element = element.find_element(
+                    By.CSS_SELECTOR,
+                    "* > div:nth-child(1) > ytd-rich-grid-media:nth-child(1) > div:nth-child(1) > div:nth-child(3) > div:nth-child(1) > a:nth-child(1)",
+                )
+                link = child_element.get_attribute('href')
+                text_array.append(link.rsplit('/', 1)[-1])
+                dataset.append(text_array)
+            except:
+                continue
+    return dataset
 
-time.sleep(3)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 1000);")
-
-time.sleep(.5)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
-time.sleep(.5)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
-driver.execute_script("window.scrollTo(0, 100000);")
-
-time.sleep(.8)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
-
-time.sleep(.8)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
-
-time.sleep(.8)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
-
-time.sleep(.5)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 100000);")
-
-time.sleep(.8)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 200000);")
-
-time.sleep(.8)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 200000);")
-
-time.sleep(.8)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 200000);")
-
-time.sleep(.8)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 200000);")
-
-time.sleep(.8)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 200000);")
-
-time.sleep(.8)  # Wait for 3 seconds
-driver.execute_script("window.scrollTo(0, 200000);")
-
-time.sleep(.5)  # Wait for 3 seconds
-
-
-elements = driver.find_elements(By.CSS_SELECTOR,"ytd-rich-item-renderer.ytd-rich-grid-renderer")
-
-dataset = []
-print(len(elements))
-for element in elements:
-    # Get the outer HTML of the element
-    
-    try:
-        text = element.text
-        text_array = text.splitlines()
-
-        child_element = element.find_element(By.CSS_SELECTOR,"* > div:nth-child(1) > ytd-rich-grid-media:nth-child(1) > div:nth-child(1) > div:nth-child(3) > div:nth-child(1) > a:nth-child(1)")
-        link = child_element.get_attribute('href')
-        text_array.append(link.rsplit('/', 1)[-1])
-        dataset.append(text_array)
-    except:
-        continue
+dataset = scroll_home_feed(driver, passes=5)
+print(len(dataset))
 
 
 
