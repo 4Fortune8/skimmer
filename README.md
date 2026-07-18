@@ -45,3 +45,10 @@ pause 15 seconds between channel requests, and mark a queue entry complete
 only after a successful metric insert.
 
 See [RUNBOOK.md](RUNBOOK.md) for setup, execution, and inspection procedures.
+
+## Automated workflow
+
+`workflow.py` runs the full collection cycle in order: YouTube feed, queue
+refresh, vidIQ profiles, then Social Blade profiles. It waits 30 minutes after
+the cycle completes before starting again. Set `SKIMMER_CYCLE_SECONDS` to
+override that interval for development.

@@ -58,6 +58,29 @@ Social Blade routes canonical YouTube channel IDs (`UC...`) as
 Run `SOCIALBLADE_HEADLESS=true python buildIDProfile-old.py` when a visible
 browser is not required.
 
+## Run at startup
+
+Run the looping workflow manually with:
+
+```bash
+YOUTUBE_HEADLESS=true VIDIQ_HEADLESS=true SOCIALBLADE_HEADLESS=true \
+  python workflow.py
+```
+
+It runs YouTube collection, refreshes the profile queue, collects the vidIQ and
+Social Blade assignments, then waits 30 minutes before repeating. If YouTube
+collection fails, the dependent profile steps are skipped for that cycle.
+
+To start it automatically on this host:
+
+```bash
+sudo cp systemd/skimmer-workflow.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now skimmer-workflow.service
+```
+
+Use `journalctl -u skimmer-workflow.service -f` to follow the workflow logs.
+
 ## Inspect data
 
 Use the SQLite CLI to inspect recent rows:

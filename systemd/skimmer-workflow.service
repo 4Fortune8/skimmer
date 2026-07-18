@@ -1,0 +1,19 @@
+[Unit]
+Description=Skimmer YouTube and profile collection workflow
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=orangepi
+WorkingDirectory=/home/orangepi/code_projects/skimmer
+Environment=YOUTUBE_HEADLESS=true
+Environment=VIDIQ_HEADLESS=true
+Environment=SOCIALBLADE_HEADLESS=true
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /home/orangepi/code_projects/skimmer/workflow.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
