@@ -38,7 +38,7 @@ collectors. Do not place the database in a directory served publicly.
    bronze record:
 
    ```bash
-   python buildIDProfil.py
+   python buildidProfile.py
    ```
 
 3. Collect Social Blade snapshots for YouTube channels without an existing

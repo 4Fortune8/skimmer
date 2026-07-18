@@ -7,11 +7,13 @@ from bronze_store import (
     insert_socialblade_daily_channel_metrics,
     insert_socialblade_channel_stats,
 )
+from profile_normalization import normalize_channel_profile, print_normalized_profile
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.support.wait import WebDriverWait
 
 
@@ -114,26 +116,44 @@ def collect_socialblade_stats():
         "bronze_socialblade_channel_stats"
     )
     channel_limit = int(os.environ.get("SKIMMER_CHANNEL_LIMIT", "0"))
-    if channel_limit > 0:
-        channel_ids = channel_ids[:channel_limit]
+    print(f"Social Blade collection queue size: {len(channel_ids)}")
+    if not channel_ids:
+        print("No unprocessed channels found for Social Blade collector.")
+        return
 
     driver = create_driver()
     driver.set_page_load_timeout(60)
+    stored_profiles = 0
     try:
         for channel_id in channel_ids:
+            if channel_limit > 0 and stored_profiles >= channel_limit:
+                break
             source_url = socialblade_url(channel_id)
-            driver.get(source_url)
-            WebDriverWait(driver, 30).until(
-                EC.presence_of_element_located(
-                    (By.XPATH, "//*[normalize-space()='Subscribers']")
+            try:
+                driver.get(source_url)
+                WebDriverWait(driver, 30).until(
+                    EC.presence_of_element_located(
+                        (By.XPATH, "//*[normalize-space()='Subscribers']")
+                    )
                 )
-            )
-            lines = [
-                line.strip()
-                for line in driver.find_element(By.TAG_NAME, "body").text.splitlines()
-                if line.strip()
-            ]
+                lines = [
+                    line.strip()
+                    for line in driver.find_element(By.TAG_NAME, "body").text.splitlines()
+                    if line.strip()
+                ]
+            except TimeoutException:
+                print(
+                    f"Skipped Social Blade profile for {channel_id}: page load timed out."
+                )
+                continue
+            if not {"Subscribers", "Views", "CREATOR STATISTICS"}.issubset(lines):
+                print(
+                    f"Skipped Social Blade profile for {channel_id}: metrics were unavailable."
+                )
+                continue
+
             subscribers = value_after_label(lines, "Subscribers")
+            views = value_after_label(lines, "Views")
             creator_statistics_index = lines.index("CREATOR STATISTICS")
             creator_statistics = lines[creator_statistics_index + 1 :]
             subscribers_change = value_before_label(
@@ -142,6 +162,17 @@ def collect_socialblade_stats():
             views_change = value_before_label(
                 creator_statistics, "Views for the last 30 days"
             )
+            normalized_profile = normalize_channel_profile(
+                source="socialblade",
+                channel_id=channel_id,
+                subscribers_total=convert_compact_number(subscribers),
+                subscribers_change=convert_compact_number(subscribers_change),
+                views_total=convert_compact_number(views),
+                views_change=convert_compact_number(views_change),
+                source_url=source_url,
+                raw_rendered_text=lines,
+            )
+            print_normalized_profile(normalized_profile)
             daily_rows = driver.execute_script(
                 """
                 const table = Array.from(document.querySelectorAll('table')).find(
@@ -161,19 +192,24 @@ def collect_socialblade_stats():
             )
             insert_socialblade_channel_stats(
                 {
-                    "channel_id": channel_id,
-                    "subscribers": convert_compact_number(subscribers),
-                    "subscribers_change": convert_compact_number(subscribers_change),
-                    "subscribers_change_percentage": None,
-                    "views_change": convert_compact_number(views_change),
-                    "views_change_percentage": None,
-                    "source_url": source_url,
-                    "raw_rendered_text": lines,
+                    "channel_id": normalized_profile["channel_id"],
+                    "subscribers": normalized_profile["subscribers_total"],
+                    "subscribers_change": normalized_profile["subscribers_change"],
+                    "subscribers_change_percentage": normalized_profile[
+                        "subscribers_change_percentage"
+                    ],
+                    "views_change": normalized_profile["views_change"],
+                    "views_change_percentage": normalized_profile[
+                        "views_change_percentage"
+                    ],
+                    "source_url": normalized_profile["source_url"],
+                    "raw_rendered_text": normalized_profile["raw_rendered_text"],
                 }
             )
             inserted_daily_metrics = insert_socialblade_daily_channel_metrics(
                 parse_daily_metrics(channel_id, daily_rows)
             )
+            stored_profiles += 1
             print(f"Stored Social Blade stats for {channel_id}.")
             print(f"Stored {inserted_daily_metrics} Social Blade daily metric rows.")
     finally:

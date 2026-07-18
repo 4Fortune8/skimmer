@@ -8,11 +8,13 @@ import re
 from pathlib import Path
 
 from bronze_store import get_unprocessed_youtube_channel_ids, insert_vidiq_channel_stats
+from profile_normalization import normalize_channel_profile, print_normalized_profile
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.support.wait import WebDriverWait
 
         
@@ -118,46 +120,71 @@ def collect_vidiq_stats():
         "bronze_vidiq_channel_stats"
     )
     channel_limit = int(os.environ.get("SKIMMER_CHANNEL_LIMIT", "0"))
-    if channel_limit > 0:
-        channel_ids = channel_ids[:channel_limit]
+    print(f"vidIQ collection queue size: {len(channel_ids)}")
+    if not channel_ids:
+        print("No unprocessed channels found for vidIQ collector.")
+        return
 
     driver = create_driver()
     driver.set_page_load_timeout(60)
+    stored_profiles = 0
     try:
         for channel_id in channel_ids:
+            if channel_limit > 0 and stored_profiles >= channel_limit:
+                break
             source_url = f"https://vidiq.com/youtube-stats/channel/{channel_id}"
-            driver.get(source_url)
-            WebDriverWait(driver, 30).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "h1"))
-            )
-            lines = [
-                line.strip()
-                for line in driver.find_element(By.TAG_NAME, "body").text.splitlines()
-                if line.strip()
-            ]
+            try:
+                driver.get(source_url)
+                WebDriverWait(driver, 30).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "h1"))
+                )
+                lines = [
+                    line.strip()
+                    for line in driver.find_element(By.TAG_NAME, "body").text.splitlines()
+                    if line.strip()
+                ]
+            except TimeoutException:
+                print(f"Skipped vidIQ profile for {channel_id}: page load timed out.")
+                continue
+            if not {"Subscribers", "Total Video Views"}.issubset(lines):
+                print(f"Skipped vidIQ profile for {channel_id}: metrics were unavailable.")
+                continue
+
             channel_name = (
                 driver.find_element(By.CSS_SELECTOR, "h1").text.strip().splitlines()[0]
             )
             subscribers = metric_value(lines, "Subscribers")
             views = metric_value(lines, "Total Video Views")
             earnings = metric_value(lines, "Est. Monthly Earnings")
+            normalized_profile = normalize_channel_profile(
+                source="vidiq",
+                channel_id=channel_id,
+                channel_name=channel_name,
+                subscribers_total=convert_compact_number(subscribers),
+                views_total=convert_compact_number(views),
+                earnings_low=convert_compact_number(earnings),
+                source_url=source_url,
+                raw_rendered_text=lines,
+            )
+            print_normalized_profile(normalized_profile)
             insert_vidiq_channel_stats(
                 {
-                    "channel_name": channel_name,
-                    "subscribers": convert_compact_number(subscribers),
-                    "subscribers_change": None,
-                    "views": convert_compact_number(views),
-                    "views_change": None,
-                    "earnings_low": convert_compact_number(earnings),
-                    "earnings_high": None,
-                    "engagement": None,
-                    "upload_frequency": None,
-                    "average_length": None,
-                    "channel_id": channel_id,
-                    "source_url": source_url,
-                    "raw_rendered_text": lines,
+                    "channel_name": normalized_profile["channel_name"],
+                    "subscribers": normalized_profile["subscribers_total"],
+                    "subscribers_change": normalized_profile["subscribers_change"],
+                    "views": normalized_profile["views_total"],
+                    "views_change": normalized_profile["views_change"],
+                    "earnings_low": normalized_profile["earnings_low"],
+                    "earnings_high": normalized_profile["earnings_high"],
+                    "engagement": normalized_profile["engagement"],
+                    "upload_frequency": normalized_profile["upload_frequency"],
+                    "average_length": normalized_profile["average_length"],
+                    "channel_id": normalized_profile["channel_id"],
+                    "source_url": normalized_profile["source_url"],
+                    "raw_rendered_text": normalized_profile["raw_rendered_text"],
                 }
             )
+            stored_profiles += 1
             print(f"Stored vidIQ stats for {channel_id}.")
     finally:
         driver.quit()

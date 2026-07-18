@@ -29,11 +29,11 @@ retain raw source values and include a UTC ISO-8601 `create_dt` column:
 
 ```bash
 python youtubeSkimmer.py
-python buildIDProfil.py
+python buildidProfile.py
 python buildIDProfile-old.py
 ```
 
-`buildIDProfil.py` and `buildIDProfile-old.py` read channel IDs from
+`buildidProfile.py` and `buildIDProfile-old.py` read channel IDs from
 `bronze_youtube_skimmed` and only request channels that do not already have a
 snapshot in their respective bronze table.
 
