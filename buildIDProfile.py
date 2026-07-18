@@ -7,7 +7,12 @@ import os
 import re
 from pathlib import Path
 
-from bronze_store import get_unprocessed_youtube_channel_ids, insert_vidiq_channel_stats
+from bronze_store import (
+    get_profile_queue,
+    insert_vidiq_channel_stats,
+    mark_profile_failed,
+    mark_profile_succeeded,
+)
 from profile_normalization import normalize_channel_profile, print_normalized_profile
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -116,10 +121,8 @@ def create_driver():
 
 
 def collect_vidiq_stats():
-    channel_ids = get_unprocessed_youtube_channel_ids(
-        "bronze_vidiq_channel_stats"
-    )
     channel_limit = int(os.environ.get("SKIMMER_CHANNEL_LIMIT", "0"))
+    channel_ids = get_profile_queue("vidiq", channel_limit)
     print(f"vidIQ collection queue size: {len(channel_ids)}")
     if not channel_ids:
         print("No unprocessed channels found for vidIQ collector.")
@@ -130,8 +133,8 @@ def collect_vidiq_stats():
     stored_profiles = 0
     try:
         for channel_id in channel_ids:
-            if channel_limit > 0 and stored_profiles >= channel_limit:
-                break
+            if stored_profiles:
+                time.sleep(15)
             source_url = f"https://vidiq.com/youtube-stats/channel/{channel_id}"
             try:
                 driver.get(source_url)
@@ -145,9 +148,11 @@ def collect_vidiq_stats():
                 ]
             except TimeoutException:
                 print(f"Skipped vidIQ profile for {channel_id}: page load timed out.")
+                mark_profile_failed(channel_id, "vidiq")
                 continue
             if not {"Subscribers", "Total Video Views"}.issubset(lines):
                 print(f"Skipped vidIQ profile for {channel_id}: metrics were unavailable.")
+                mark_profile_failed(channel_id, "vidiq")
                 continue
 
             channel_name = (
@@ -185,6 +190,7 @@ def collect_vidiq_stats():
                 }
             )
             stored_profiles += 1
+            mark_profile_succeeded(channel_id, "vidiq")
             print(f"Stored vidIQ stats for {channel_id}.")
     finally:
         driver.quit()
@@ -198,12 +204,8 @@ class BlogSpider(scrapy.Spider):
         self.name = 'blogspider'
         self.base= 'https://vidiq.com/youtube-stats/channel/'
         self.start_urls =[]
-        channel_ids = get_unprocessed_youtube_channel_ids(
-            "bronze_vidiq_channel_stats"
-        )
         channel_limit = int(os.environ.get("SKIMMER_CHANNEL_LIMIT", "0"))
-        if channel_limit > 0:
-            channel_ids = channel_ids[:channel_limit]
+        channel_ids = get_profile_queue("vidiq", channel_limit)
         self.start_urls = [self.base + channel_id for channel_id in channel_ids]
 
     

@@ -21,7 +21,7 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
-from bronze_store import insert_youtube_skimmed
+from bronze_store import insert_youtube_skimmed, refresh_profile_queue
 # Initialize the Firefox webdriver
  
 
@@ -283,6 +283,7 @@ def collect_youtube_feed():
             records,
             "https://www.youtube.com",
         )
+        refresh_profile_queue()
         print(f"Stored {inserted} YouTube feed records.")
     finally:
         driver.quit()

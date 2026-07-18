@@ -1,11 +1,14 @@
 import os
 import re
+import time
 from pathlib import Path
 
 from bronze_store import (
-    get_unprocessed_youtube_channel_ids,
+    get_profile_queue,
     insert_socialblade_daily_channel_metrics,
     insert_socialblade_channel_stats,
+    mark_profile_failed,
+    mark_profile_succeeded,
 )
 from profile_normalization import normalize_channel_profile, print_normalized_profile
 from selenium import webdriver
@@ -77,7 +80,6 @@ def parse_daily_metrics(channel_id, rows):
         records.append(
             {
                 "channel_id": channel_id,
-                "metric_date": date_match.group(0),
                 "subscribers_change": convert_compact_number(nullable_value(row[1])),
                 "subscribers_total": convert_compact_number(nullable_value(row[2])),
                 "views_change": convert_compact_number(nullable_value(row[3])),
@@ -112,10 +114,8 @@ def create_driver():
 
 
 def collect_socialblade_stats():
-    channel_ids = get_unprocessed_youtube_channel_ids(
-        "bronze_socialblade_channel_stats"
-    )
     channel_limit = int(os.environ.get("SKIMMER_CHANNEL_LIMIT", "0"))
+    channel_ids = get_profile_queue("socialblade", channel_limit)
     print(f"Social Blade collection queue size: {len(channel_ids)}")
     if not channel_ids:
         print("No unprocessed channels found for Social Blade collector.")
@@ -126,8 +126,8 @@ def collect_socialblade_stats():
     stored_profiles = 0
     try:
         for channel_id in channel_ids:
-            if channel_limit > 0 and stored_profiles >= channel_limit:
-                break
+            if stored_profiles:
+                time.sleep(15)
             source_url = socialblade_url(channel_id)
             try:
                 driver.get(source_url)
@@ -145,11 +145,13 @@ def collect_socialblade_stats():
                 print(
                     f"Skipped Social Blade profile for {channel_id}: page load timed out."
                 )
+                mark_profile_failed(channel_id, "socialblade")
                 continue
             if not {"Subscribers", "Views", "CREATOR STATISTICS"}.issubset(lines):
                 print(
                     f"Skipped Social Blade profile for {channel_id}: metrics were unavailable."
                 )
+                mark_profile_failed(channel_id, "socialblade")
                 continue
 
             subscribers = value_after_label(lines, "Subscribers")
@@ -198,6 +200,7 @@ def collect_socialblade_stats():
                     "subscribers_change_percentage": normalized_profile[
                         "subscribers_change_percentage"
                     ],
+                    "views": normalized_profile["views_total"],
                     "views_change": normalized_profile["views_change"],
                     "views_change_percentage": normalized_profile[
                         "views_change_percentage"
@@ -210,6 +213,7 @@ def collect_socialblade_stats():
                 parse_daily_metrics(channel_id, daily_rows)
             )
             stored_profiles += 1
+            mark_profile_succeeded(channel_id, "socialblade")
             print(f"Stored Social Blade stats for {channel_id}.")
             print(f"Stored {inserted_daily_metrics} Social Blade daily metric rows.")
     finally:

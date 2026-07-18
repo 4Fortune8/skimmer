@@ -1,18 +1,22 @@
-import json
 import importlib.util
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from bronze_store import (
-    get_unprocessed_youtube_channel_ids,
+    get_profile_queue,
     initialize_database,
-    insert_socialblade_daily_channel_metrics,
     insert_socialblade_channel_stats,
+    insert_socialblade_daily_channel_metrics,
     insert_vidiq_channel_stats,
     insert_youtube_skimmed,
+    mark_profile_failed,
+    mark_profile_succeeded,
+    refresh_profile_queue,
 )
+
 
 SOCIALBLADE_MODULE_SPEC = importlib.util.spec_from_file_location(
     "socialblade_collector",
@@ -30,139 +34,152 @@ class BronzeStoreTests(unittest.TestCase):
     def tearDown(self):
         self.temporary_directory.cleanup()
 
-    def test_collectors_store_raw_snapshots_in_bronze_tables(self):
-        youtube_record = {
-            "video_name": "A video",
-            "channel_display_name": "A channel",
-            "views": "1K views",
-            "age": "1 hour ago",
+    def test_metric_records_are_deduplicated_without_raw_or_ingestion_columns(self):
+        vidiq_record = {
             "channel_id": "@channel",
+            "channel_name": "A channel",
+            "subscribers": 1000,
+            "subscribers_change": None,
+            "views": 2000,
+            "views_change": None,
+            "earnings_low": 1,
+            "earnings_high": 2,
+            "engagement": None,
+            "upload_frequency": None,
+            "average_length": None,
         }
-        initialize_database(self.database_path)
-        inserted = insert_youtube_skimmed(
-            [youtube_record],
-            "youtube.com",
-            self.database_path,
-        )
-        insert_vidiq_channel_stats(
-            {
-                "channel_name": "A channel",
-                "subscribers": 1000,
-                "subscribers_change": "+10",
-                "views": "2K",
-                "views_change": "+20",
-                "earnings_low": 1,
-                "earnings_high": 2,
-                "engagement": "5%",
-                "upload_frequency": "weekly",
-                "average_length": "10 minutes",
-                "channel_id": "channel",
-            },
-            self.database_path,
-        )
-        insert_socialblade_channel_stats(
-            {
-                "channel_id": "channel",
-                "subscribers": 1000,
-                "subscribers_change": 10,
-                "subscribers_change_percentage": "1%",
-                "views_change": 2000,
-                "views_change_percentage": "2%",
-                "raw_profile": ["channel", 1000, 10, "1%", 2000, "2%"],
-            },
-            self.database_path,
-        )
+        self.assertEqual(insert_vidiq_channel_stats(vidiq_record, self.database_path), 1)
+        self.assertEqual(insert_vidiq_channel_stats(vidiq_record, self.database_path), 0)
 
-        with sqlite3.connect(self.database_path) as connection:
-            saved_youtube = connection.execute(
-                "SELECT source_file, create_dt, raw_record_json "
-                "FROM bronze_youtube_skimmed"
-            ).fetchone()
-            counts = connection.execute(
-                """
-                SELECT
-                    (SELECT COUNT(*) FROM bronze_youtube_skimmed),
-                    (SELECT COUNT(*) FROM bronze_vidiq_channel_stats),
-                    (SELECT COUNT(*) FROM bronze_socialblade_channel_stats)
-                """
-            ).fetchone()
-            create_dt_counts = connection.execute(
-                """
-                SELECT
-                    (SELECT COUNT(*) FROM bronze_youtube_skimmed WHERE create_dt IS NOT NULL),
-                    (SELECT COUNT(*) FROM bronze_vidiq_channel_stats WHERE create_dt IS NOT NULL),
-                    (SELECT COUNT(*) FROM bronze_socialblade_channel_stats WHERE create_dt IS NOT NULL)
-                """
-            ).fetchone()
-
-        self.assertEqual(inserted, 1)
-        self.assertEqual(saved_youtube[0], "youtube.com")
-        self.assertTrue(saved_youtube[1])
-        self.assertEqual(json.loads(saved_youtube[2]), youtube_record)
-        self.assertEqual(counts, (1, 1, 1))
-        self.assertEqual(create_dt_counts, (1, 1, 1))
-
-    def test_unprocessed_channels_are_returned_for_each_destination(self):
-        insert_youtube_skimmed(
-            [
-                {
-                    "video_name": "A video",
-                    "channel_display_name": "A channel",
-                    "views": "1K views",
-                    "age": "1 hour ago",
-                    "channel_id": "@channel",
-                }
-            ],
-            "youtube.com",
-            self.database_path,
-        )
-
+        daily_record = {
+            "channel_id": "@channel",
+            "metric_date": "2026-07-15",
+            "subscribers_change": 10,
+            "subscribers_total": 1000,
+            "views_change": 20,
+            "views_total": 2000,
+            "videos_change": 1,
+            "videos_total": 10,
+            "earnings_low": 1,
+            "earnings_high": 2,
+        }
         self.assertEqual(
-            get_unprocessed_youtube_channel_ids(
-                "bronze_vidiq_channel_stats", self.database_path
-            ),
-            ["@channel"],
+            insert_socialblade_daily_channel_metrics([daily_record], self.database_path),
+            1,
         )
-        with self.assertRaises(ValueError):
-            get_unprocessed_youtube_channel_ids(
-                "not_a_bronze_table", self.database_path
-            )
+        self.assertEqual(
+            insert_socialblade_daily_channel_metrics([daily_record], self.database_path),
+            0,
+        )
 
-    def test_existing_bronze_tables_receive_create_dt(self):
         with sqlite3.connect(self.database_path) as connection:
-            connection.execute(
-                """
-                CREATE TABLE bronze_youtube_skimmed (
-                    id INTEGER PRIMARY KEY,
-                    ingested_at TEXT NOT NULL,
-                    source_file TEXT NOT NULL,
-                    video_name TEXT,
-                    channel_display_name TEXT,
-                    views TEXT,
-                    age TEXT,
-                    channel_id TEXT,
-                    raw_record_json TEXT NOT NULL
+            vidiq_columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(bronze_vidiq_channel_stats)")
+            }
+            daily_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(bronze_socialblade_daily_channel_metrics)"
                 )
-                """
-            )
-            connection.execute(
-                """
-                INSERT INTO bronze_youtube_skimmed (
-                    ingested_at, source_file, raw_record_json
-                ) VALUES ('2026-07-15T00:00:00+00:00', 'youtube.com', '{}')
-                """
-            )
+            }
+        self.assertNotIn("create_dt", vidiq_columns)
+        self.assertNotIn("ingested_at", vidiq_columns)
+        self.assertNotIn("raw_record_json", vidiq_columns)
+        self.assertNotIn("metric_date", daily_columns)
+        self.assertNotIn("raw_record_json", daily_columns)
 
-        initialize_database(self.database_path)
+    def test_queue_refreshes_and_fails_over_once(self):
+        insert_youtube_skimmed(
+            [{
+                "video_name": "New video",
+                "channel_display_name": "A channel",
+                "views": "1K views",
+                "age": "1 hour ago",
+                "channel_id": "@channel",
+            }],
+            "youtube.com",
+            self.database_path,
+        )
+        refresh_profile_queue(self.database_path)
+        initial_source = (
+            "vidiq"
+            if get_profile_queue("vidiq", database_path=self.database_path)
+            else "socialblade"
+        )
+        other_source = "socialblade" if initial_source == "vidiq" else "vidiq"
 
+        mark_profile_failed("@channel", initial_source, self.database_path)
+        self.assertEqual(
+            get_profile_queue(other_source, database_path=self.database_path), ["@channel"]
+        )
+        mark_profile_failed("@channel", other_source, self.database_path)
+        self.assertEqual(get_profile_queue("vidiq", database_path=self.database_path), [])
+        self.assertEqual(
+            get_profile_queue("socialblade", database_path=self.database_path), []
+        )
+
+    def test_success_is_requeued_after_seven_days_or_recent_video(self):
+        insert_youtube_skimmed(
+            [{
+                "video_name": "Old video",
+                "channel_display_name": "A channel",
+                "views": "1K views",
+                "age": "20 days ago",
+                "channel_id": "@channel",
+            }],
+            "youtube.com",
+            self.database_path,
+        )
+        refresh_profile_queue(self.database_path)
+        source = (
+            "vidiq"
+            if get_profile_queue("vidiq", database_path=self.database_path)
+            else "socialblade"
+        )
+        mark_profile_succeeded("@channel", source, self.database_path)
+        self.assertEqual(get_profile_queue(source, database_path=self.database_path), [])
+
+        stale = (datetime.now(timezone.utc) - timedelta(days=8)).replace(
+            microsecond=0
+        ).isoformat()
         with sqlite3.connect(self.database_path) as connection:
-            create_dt = connection.execute(
-                "SELECT create_dt FROM bronze_youtube_skimmed"
+            connection.execute(
+                "UPDATE profile_queue SET last_success_at = ? WHERE channel_key = '@channel'",
+                (stale,),
+            )
+        refresh_profile_queue(self.database_path)
+        self.assertEqual(
+            get_profile_queue(source, database_path=self.database_path), ["@channel"]
+        )
+
+    def test_feed_records_older_than_fourteen_days_are_pruned(self):
+        insert_youtube_skimmed(
+            [{
+                "video_name": "Old video",
+                "channel_display_name": "A channel",
+                "views": "1K views",
+                "age": "20 days ago",
+                "channel_id": "@channel",
+            }],
+            "youtube.com",
+            self.database_path,
+        )
+        old_timestamp = (datetime.now(timezone.utc) - timedelta(days=15)).replace(
+            microsecond=0
+        ).isoformat()
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute(
+                "UPDATE bronze_youtube_skimmed SET observed_at = ?", (old_timestamp,)
+            )
+        refresh_profile_queue(self.database_path)
+        with sqlite3.connect(self.database_path) as connection:
+            remaining = connection.execute(
+                "SELECT COUNT(*) FROM bronze_youtube_skimmed"
             ).fetchone()[0]
+        self.assertEqual(remaining, 0)
 
-        self.assertEqual(create_dt, "2026-07-15T00:00:00+00:00")
-
-    def test_socialblade_routes_and_only_accepts_rendered_change_values(self):
+    def test_socialblade_routes_handles(self):
         self.assertEqual(
             socialblade_collector.socialblade_url("UClgRkhTL3_hImCAmdLfDE4g"),
             "https://socialblade.com/youtube/channel/UClgRkhTL3_hImCAmdLfDE4g",
@@ -171,54 +188,6 @@ class BronzeStoreTests(unittest.TestCase):
             socialblade_collector.socialblade_url("@mrbeast"),
             "https://socialblade.com/youtube/handle/mrbeast",
         )
-        self.assertIsNone(
-            socialblade_collector.value_before_label(
-                ["Subscribers for the last 30 days"],
-                "Subscribers for the last 30 days",
-            )
-        )
-        self.assertEqual(
-            socialblade_collector.value_before_label(
-                ["42K", "Subscribers for the last 30 days"],
-                "Subscribers for the last 30 days",
-            ),
-            "42K",
-        )
-
-    def test_socialblade_daily_metrics_retain_all_source_columns(self):
-        inserted = insert_socialblade_daily_channel_metrics(
-            [
-                {
-                    "channel_id": "UClgRkhTL3_hImCAmdLfDE4g",
-                    "metric_date": "2026-07-15",
-                    "subscribers_change": None,
-                    "subscribers_total": 141_000_000,
-                    "views_change": None,
-                    "views_total": 31_566_836_666,
-                    "videos_change": None,
-                    "videos_total": 459,
-                    "earnings_low": 0,
-                    "earnings_high": 0,
-                    "raw_row": ["Wed2026-07-15", "--", "141M"],
-                }
-            ],
-            self.database_path,
-        )
-
-        with sqlite3.connect(self.database_path) as connection:
-            row = connection.execute(
-                """
-                SELECT metric_date, subscribers_total, views_total, videos_total,
-                       earnings_low, earnings_high, create_dt
-                FROM bronze_socialblade_daily_channel_metrics
-                """
-            ).fetchone()
-
-        self.assertEqual(inserted, 1)
-        self.assertEqual(
-            row[:6], ("2026-07-15", 141_000_000, 31_566_836_666, 459, 0, 0)
-        )
-        self.assertTrue(row[6])
 
 
 if __name__ == "__main__":

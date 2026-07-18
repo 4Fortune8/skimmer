@@ -34,21 +34,24 @@ collectors. Do not place the database in a directory served publicly.
    python youtubeSkimmer.py
    ```
 
-2. Collect vidIQ snapshots for YouTube channels without an existing vidIQ
-   bronze record:
+2. Refresh and inspect the profile queue. This is normally run automatically
+   at the end of the YouTube collector:
 
    ```bash
-   python buildidProfile.py
+   python buildProfileManager.py
    ```
 
-3. Collect Social Blade snapshots for YouTube channels without an existing
-   Social Blade bronze record:
+3. Collect the source-assigned profile metrics. Each collector waits 15 seconds
+   between channels. A failure automatically moves the channel to the other
+   source; a second failure marks it for review rather than re-queueing it:
 
    ```bash
+   python buildIDProfile.py
    python buildIDProfile-old.py
    ```
 
-All collector output is written to SQLite. No CSV output is produced.
+All collector output is written to SQLite. Profile metrics are deduplicated by
+their normalized values. YouTube feed records are retained for 14 days.
 
 Social Blade routes canonical YouTube channel IDs (`UC...`) as
 `/youtube/channel/<id>` and handles as `/youtube/handle/<handle>`.
@@ -61,22 +64,19 @@ Use the SQLite CLI to inspect recent rows:
 
 ```bash
 sqlite3 "$SKIMMER_DB_PATH" \
-  "SELECT create_dt, channel_id, video_name FROM bronze_youtube_skimmed ORDER BY id DESC LIMIT 10;"
+  "SELECT observed_at, channel_id, video_name FROM bronze_youtube_skimmed ORDER BY id DESC LIMIT 10;"
 ```
 
 When using the default location, replace `"$SKIMMER_DB_PATH"` with
 `data/skimmer.db`.
 
-Check that every bronze row has a creation timestamp:
+Inspect queued work and channels requiring manual review:
 
 ```bash
 sqlite3 "$SKIMMER_DB_PATH" "
-SELECT 'youtube' AS source, COUNT(*) AS missing_create_dt
-FROM bronze_youtube_skimmed WHERE create_dt IS NULL
-UNION ALL
-SELECT 'vidiq', COUNT(*) FROM bronze_vidiq_channel_stats WHERE create_dt IS NULL
-UNION ALL
-SELECT 'socialblade', COUNT(*) FROM bronze_socialblade_channel_stats WHERE create_dt IS NULL;
+SELECT assigned_source, digested, needs_review, COUNT(*)
+FROM profile_queue
+GROUP BY assigned_source, digested, needs_review;
 "
 ```
 
@@ -86,5 +86,6 @@ If Firefox cannot start, configure both `FIREFOX_BINARY_PATH` and
 `GECKODRIVER_PATH` to executable, compatible binaries. Set
 `YOUTUBE_HEADLESS=true` for non-interactive environments.
 
-If a collector has no work, confirm `bronze_youtube_skimmed` contains channel
-IDs and that the same IDs are not already present in the target bronze table.
+If a collector has no work, run `python buildProfileManager.py` and inspect
+`profile_queue`; completed channels remain digested until they are eligible
+again after seven days or a newly seen video.
