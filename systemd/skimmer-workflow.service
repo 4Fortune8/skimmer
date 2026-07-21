@@ -7,11 +7,14 @@ Wants=network-online.target
 Type=simple
 User=orangepi
 WorkingDirectory=/home/orangepi/code_projects/skimmer
-Environment=YOUTUBE_HEADLESS=true
+Environment=YOUTUBE_HEADLESS=false
 Environment=VIDIQ_HEADLESS=true
-Environment=SOCIALBLADE_HEADLESS=true
+Environment=SOCIALBLADE_HEADLESS=false
+Environment=SOCIALBLADE_CHANNEL_DELAY_SECONDS=120
+Environment=SOCIALBLADE_PAGE_DELAY_SECONDS=20
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 /home/orangepi/code_projects/skimmer/workflow.py
+Environment=SKIMMER_YOUTUBE_CPU=0
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1920x1080x24" /usr/bin/python3 /home/orangepi/code_projects/skimmer/workflow.py
 Restart=always
 RestartSec=30
 

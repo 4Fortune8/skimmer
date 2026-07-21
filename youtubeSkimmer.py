@@ -156,7 +156,15 @@ def create_driver():
     options = Options()
     options.set_preference("media.volume_scale", "0.0")
     options.binary_location = resolve_firefox_binary_path()
-    if parse_bool_env("YOUTUBE_HEADLESS", default=False):
+    headless_env = os.environ.get("YOUTUBE_HEADLESS")
+    if headless_env is None:
+        has_display = bool(
+            os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+        )
+        run_headless = not has_display
+    else:
+        run_headless = parse_bool_env("YOUTUBE_HEADLESS", default=False)
+    if run_headless:
         options.add_argument("-headless")
     try:
         return webdriver.Firefox(
@@ -212,13 +220,17 @@ def extract_home_records(driver):
                 }
 
                 const channelUrl = channel.href;
-                const channelId = channelUrl.split('/').filter(Boolean).pop();
+                const channelPath = new URL(channelUrl).pathname;
+                const channelId = channelPath.split('/').filter(Boolean).pop();
                 return {
                     video_name: lines[viewsIndex - 2],
                     channel_display_name: lines[viewsIndex - 1],
                     views: lines[viewsIndex],
                     age: lines[viewsIndex + 1],
                     channel_id: channelId,
+                    youtube_channel_id: channelPath.startsWith('/channel/')
+                        ? channelId
+                        : null,
                 };
             })
             .filter(Boolean);

@@ -1,4 +1,4 @@
-"""Run the YouTube and profile collection workflow on a fixed interval."""
+"""Run hourly YouTube collection alongside persistent profile workers."""
 
 import os
 import subprocess
@@ -9,13 +9,9 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-WORKFLOW_SCRIPTS = (
-    "youtubeSkimmer.py",
-    "buildProfileManager.py",
-    "buildIDProfile.py",
-    "buildIDProfile-old.py",
-)
-DEFAULT_CYCLE_SECONDS = 30 * 60
+YOUTUBE_SCRIPT = "youtubeSkimmer.py"
+PROFILE_MANAGER_SCRIPT = "buildProfileManager.py"
+DEFAULT_CYCLE_SECONDS = 60 * 60
 
 
 def cycle_seconds():
@@ -31,8 +27,12 @@ def cycle_seconds():
 
 def run_script(script_name, runner=subprocess.run):
     print(f"[{datetime.now(timezone.utc).isoformat()}] Starting {script_name}.")
+    command = [sys.executable, script_name]
+    youtube_cpu = os.environ.get("SKIMMER_YOUTUBE_CPU")
+    if script_name == YOUTUBE_SCRIPT and youtube_cpu:
+        command = ["taskset", "-c", youtube_cpu, *command]
     result = runner(
-        [sys.executable, script_name],
+        command,
         cwd=PROJECT_ROOT,
         env=os.environ.copy(),
         check=False,
@@ -43,18 +43,24 @@ def run_script(script_name, runner=subprocess.run):
     return True
 
 
-def run_cycle(runner=subprocess.run):
-    """Run one ordered workflow cycle and report whether it fully succeeded."""
-    if not run_script(WORKFLOW_SCRIPTS[0], runner):
-        return False
-    return all(run_script(script_name, runner) for script_name in WORKFLOW_SCRIPTS[1:])
+def start_profile_manager(popen=subprocess.Popen):
+    print(f"[{datetime.now(timezone.utc).isoformat()}] Starting {PROFILE_MANAGER_SCRIPT}.")
+    return popen(
+        [sys.executable, PROFILE_MANAGER_SCRIPT],
+        cwd=PROJECT_ROOT,
+        env=os.environ.copy(),
+    )
 
 
-def main(sleeper=time.sleep):
+def main(sleeper=time.sleep, popen=subprocess.Popen, runner=subprocess.run):
     interval = cycle_seconds()
+    profile_manager = start_profile_manager(popen)
     while True:
-        run_cycle()
-        print(f"Sleeping for {interval} seconds before the next workflow cycle.")
+        if profile_manager.poll() is not None:
+            print("Profile manager exited; restarting it.")
+            profile_manager = start_profile_manager(popen)
+        run_script(YOUTUBE_SCRIPT, runner)
+        print(f"Sleeping for {interval} seconds before the next YouTube collection.")
         sleeper(interval)
 
 

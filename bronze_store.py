@@ -30,8 +30,9 @@ def _timestamp(value=None):
 
 
 def _connection(db_path=None):
-    connection = sqlite3.connect(db_path or database_path())
+    connection = sqlite3.connect(db_path or database_path(), timeout=30)
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 30000")
     return connection
 
 
@@ -78,6 +79,7 @@ def _create_tables(connection):
             views TEXT,
             age TEXT,
             channel_id TEXT NOT NULL,
+            youtube_channel_id TEXT,
             record_digest TEXT NOT NULL UNIQUE
         );
         CREATE INDEX IF NOT EXISTS idx_youtube_feed_retention
@@ -96,10 +98,16 @@ def _create_tables(connection):
             assigned_source TEXT NOT NULL CHECK(assigned_source IN ('vidiq', 'socialblade')),
             vidiq_failed INTEGER NOT NULL DEFAULT 0 CHECK(vidiq_failed IN (0, 1)),
             socialblade_failed INTEGER NOT NULL DEFAULT 0 CHECK(socialblade_failed IN (0, 1)),
-            needs_review INTEGER NOT NULL DEFAULT 0 CHECK(needs_review IN (0, 1))
+            needs_review INTEGER NOT NULL DEFAULT 0 CHECK(needs_review IN (0, 1)),
+            claimed_by TEXT,
+            claimed_at TEXT,
+            youtube_channel_id TEXT,
+            channel_id_claimed_by TEXT,
+            channel_id_claimed_at TEXT,
+            youtube_channel_id_attempted_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_profile_queue_work
-            ON profile_queue(digested, needs_review, assigned_source);
+            ON profile_queue(digested, needs_review, assigned_source, claimed_at);
 
         CREATE TABLE IF NOT EXISTS bronze_vidiq_channel_stats (
             id INTEGER PRIMARY KEY,
@@ -120,18 +128,6 @@ def _create_tables(connection):
         CREATE TABLE IF NOT EXISTS bronze_socialblade_channel_stats (
             id INTEGER PRIMARY KEY,
             channel_id TEXT NOT NULL,
-            subscribers,
-            subscribers_change,
-            subscribers_change_percentage,
-            views,
-            views_change,
-            views_change_percentage,
-            data_digest TEXT NOT NULL UNIQUE
-        );
-
-        CREATE TABLE IF NOT EXISTS bronze_socialblade_daily_channel_metrics (
-            id INTEGER PRIMARY KEY,
-            channel_id TEXT NOT NULL,
             subscribers_change,
             subscribers_total,
             views_change,
@@ -142,6 +138,33 @@ def _create_tables(connection):
             earnings_high,
             data_digest TEXT NOT NULL UNIQUE
         );
+
+        CREATE TABLE IF NOT EXISTS collection_errors (
+            id INTEGER PRIMARY KEY,
+            occurred_at TEXT NOT NULL,
+            source TEXT NOT NULL CHECK(source IN ('vidiq', 'socialblade')),
+            channel_id TEXT,
+            source_url TEXT,
+            error_type TEXT NOT NULL,
+            status_code INTEGER,
+            message TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_collection_errors_source_time
+            ON collection_errors(source, occurred_at);
+
+        CREATE TABLE IF NOT EXISTS collection_attempts (
+            id INTEGER PRIMARY KEY,
+            occurred_at TEXT NOT NULL,
+            source TEXT NOT NULL CHECK(source IN ('vidiq', 'socialblade')),
+            channel_key TEXT NOT NULL,
+            identifier TEXT NOT NULL,
+            identifier_kind TEXT NOT NULL CHECK(identifier_kind IN ('handle', 'channel_id')),
+            source_url TEXT NOT NULL,
+            outcome TEXT NOT NULL CHECK(outcome IN ('succeeded', 'failed')),
+            failure_type TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_collection_attempts_channel
+            ON collection_attempts(channel_key, source, occurred_at);
         """
     )
 
@@ -150,8 +173,6 @@ def _legacy_tables(connection):
     expected_columns = {
         "bronze_youtube_skimmed": "record_digest",
         "bronze_vidiq_channel_stats": "data_digest",
-        "bronze_socialblade_channel_stats": "data_digest",
-        "bronze_socialblade_daily_channel_metrics": "data_digest",
     }
     legacy = []
     for table, expected_column in expected_columns.items():
@@ -166,12 +187,85 @@ def _legacy_tables(connection):
     return legacy
 
 
+def _migrate_socialblade_table_name(connection):
+    stats_columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(bronze_socialblade_channel_stats)"
+        )
+    }
+    if stats_columns and "subscribers_total" not in stats_columns:
+        connection.execute("DROP TABLE bronze_socialblade_channel_stats")
+
+    daily_columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(bronze_socialblade_daily_channel_metrics)"
+        )
+    }
+    if daily_columns:
+        stats_exists = connection.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type = 'table' AND name = 'bronze_socialblade_channel_stats'
+            """
+        ).fetchone()
+        if stats_exists:
+            connection.execute("DROP TABLE bronze_socialblade_daily_channel_metrics")
+        else:
+            connection.execute(
+                """
+                ALTER TABLE bronze_socialblade_daily_channel_metrics
+                RENAME TO bronze_socialblade_channel_stats
+                """
+            )
+
+
+def _ensure_profile_queue_columns(connection):
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(profile_queue)")
+    }
+    if "claimed_by" not in columns:
+        connection.execute("ALTER TABLE profile_queue ADD COLUMN claimed_by TEXT")
+    if "claimed_at" not in columns:
+        connection.execute("ALTER TABLE profile_queue ADD COLUMN claimed_at TEXT")
+    if "youtube_channel_id" not in columns:
+        connection.execute("ALTER TABLE profile_queue ADD COLUMN youtube_channel_id TEXT")
+    if "channel_id_claimed_by" not in columns:
+        connection.execute(
+            "ALTER TABLE profile_queue ADD COLUMN channel_id_claimed_by TEXT"
+        )
+    if "channel_id_claimed_at" not in columns:
+        connection.execute(
+            "ALTER TABLE profile_queue ADD COLUMN channel_id_claimed_at TEXT"
+        )
+    if "youtube_channel_id_attempted_at" not in columns:
+        connection.execute(
+            "ALTER TABLE profile_queue "
+            "ADD COLUMN youtube_channel_id_attempted_at TEXT"
+        )
+
+
+def _ensure_youtube_feed_columns(connection):
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(bronze_youtube_skimmed)")
+    }
+    if "youtube_channel_id" not in columns:
+        connection.execute(
+            "ALTER TABLE bronze_youtube_skimmed ADD COLUMN youtube_channel_id TEXT"
+        )
+
+
 def initialize_database(database_path=None):
     """Create compact, deduplicated storage and migrate legacy collector tables."""
     transfers = []
     with _connection(database_path) as connection:
         legacy = _legacy_tables(connection)
+        _migrate_socialblade_table_name(connection)
         _create_tables(connection)
+        _ensure_youtube_feed_columns(connection)
+        _ensure_profile_queue_columns(connection)
+        connection.execute("PRAGMA journal_mode = WAL")
         for table, legacy_name in legacy:
             rows = connection.execute(f"SELECT * FROM {legacy_name}").fetchall()
             columns = [
@@ -196,10 +290,6 @@ def initialize_database(database_path=None):
             )
         elif table == "bronze_vidiq_channel_stats" and record.get("channel_id"):
             insert_vidiq_channel_stats(record, database_path)
-        elif table == "bronze_socialblade_channel_stats" and record.get("channel_id"):
-            insert_socialblade_channel_stats(record, database_path)
-        elif table == "bronze_socialblade_daily_channel_metrics" and record.get("channel_id"):
-            insert_socialblade_daily_channel_metrics([record], database_path)
 
 
 def insert_youtube_skimmed(records, source_file, database_path=None):
@@ -221,6 +311,7 @@ def insert_youtube_skimmed(records, source_file, database_path=None):
             "channel_display_name": record.get("channel_display_name"),
             "views": record.get("views"),
             "age": record.get("age"),
+            "youtube_channel_id": record.get("youtube_channel_id"),
             "video_published_at": _timestamp(published_at),
         }
         rows.append(
@@ -233,6 +324,7 @@ def insert_youtube_skimmed(records, source_file, database_path=None):
                 values["views"],
                 values["age"],
                 channel_id,
+                values["youtube_channel_id"],
                 _digest(values),
             )
         )
@@ -242,8 +334,9 @@ def insert_youtube_skimmed(records, source_file, database_path=None):
             """
             INSERT OR IGNORE INTO bronze_youtube_skimmed (
                 observed_at, video_published_at, source_file, video_name,
-                channel_display_name, views, age, channel_id, record_digest
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                channel_display_name, views, age, channel_id, youtube_channel_id,
+                record_digest
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -265,12 +358,13 @@ def refresh_profile_queue(database_path=None):
         )
         channels = connection.execute(
             """
-            SELECT channel_id, channel_display_name, MAX(video_published_at), MAX(observed_at)
+            SELECT channel_id, channel_display_name, MAX(video_published_at),
+                   MAX(observed_at), MAX(youtube_channel_id)
             FROM bronze_youtube_skimmed
             GROUP BY LOWER(TRIM(channel_id))
             """
         ).fetchall()
-        for channel_id, channel_name, latest_video_at, last_seen_at in channels:
+        for channel_id, channel_name, latest_video_at, last_seen_at, youtube_channel_id in channels:
             key = _channel_key(channel_id)
             existing = connection.execute(
                 "SELECT last_success_at, digested, needs_review FROM profile_queue WHERE channel_key = ?",
@@ -293,20 +387,37 @@ def refresh_profile_queue(database_path=None):
                     """
                     UPDATE profile_queue
                     SET channel_id = ?, channel_name = ?, latest_video_at = ?, last_seen_at = ?,
+                        youtube_channel_id = COALESCE(?, youtube_channel_id),
                         digested = CASE WHEN needs_review = 1 THEN 1 WHEN ? THEN 0 ELSE digested END
                     WHERE channel_key = ?
                     """,
-                    (channel_id, channel_name, latest_video_at, last_seen_at, eligible, key),
+                    (
+                        channel_id,
+                        channel_name,
+                        latest_video_at,
+                        last_seen_at,
+                        youtube_channel_id,
+                        eligible,
+                        key,
+                    ),
                 )
             else:
                 connection.execute(
                     """
                     INSERT INTO profile_queue (
                         channel_key, channel_id, channel_name, latest_video_at, last_seen_at,
-                        assigned_source
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        assigned_source, youtube_channel_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (key, channel_id, channel_name, latest_video_at, last_seen_at, initial_source),
+                    (
+                        key,
+                        channel_id,
+                        channel_name,
+                        latest_video_at,
+                        last_seen_at,
+                        initial_source,
+                        youtube_channel_id,
+                    ),
                 )
 
 
@@ -318,6 +429,7 @@ def get_profile_queue(source, limit=0, database_path=None):
     query = """
         SELECT channel_id FROM profile_queue
         WHERE digested = 0 AND needs_review = 0 AND assigned_source = ?
+          AND claimed_by IS NULL
         ORDER BY latest_video_at DESC, channel_key
     """
     params = [source]
@@ -328,6 +440,202 @@ def get_profile_queue(source, limit=0, database_path=None):
         return [row[0] for row in connection.execute(query, params)]
 
 
+def claim_profile_batch(source, worker_id, limit=100, database_path=None):
+    """Atomically lease pending source-assigned profiles to one worker."""
+    if source not in PROFILE_SOURCES:
+        raise ValueError(f"Unsupported profile source: {source}")
+    if not worker_id:
+        raise ValueError("worker_id is required.")
+    if limit < 1:
+        raise ValueError("limit must be at least one.")
+    initialize_database(database_path)
+    now = _now()
+    expired_at = _timestamp(now - timedelta(hours=2))
+    claimed_at = _timestamp(now)
+    with _connection(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        rows = connection.execute(
+            """
+            SELECT channel_key,
+                   CASE WHEN ? = 'socialblade' THEN youtube_channel_id ELSE channel_id END
+            FROM profile_queue
+            WHERE digested = 0
+              AND needs_review = 0
+              AND assigned_source = ?
+              AND (? != 'socialblade' OR youtube_channel_id IS NOT NULL)
+              AND (claimed_at IS NULL OR claimed_at < ?)
+            ORDER BY latest_video_at DESC, channel_key
+            LIMIT ?
+            """,
+            (source, source, source, expired_at, limit),
+        ).fetchall()
+        if rows:
+            keys = [row[0] for row in rows]
+            placeholders = ", ".join("?" for _ in keys)
+            connection.execute(
+                f"""
+                UPDATE profile_queue
+                SET claimed_by = ?, claimed_at = ?
+                WHERE channel_key IN ({placeholders})
+                """,
+                (worker_id, claimed_at, *keys),
+            )
+        return [row[1] for row in rows]
+
+
+def claim_channel_id_resolution_batch(worker_id, limit=100, database_path=None):
+    """Atomically lease unresolved SocialBlade handles for YouTube ID resolution."""
+    if not worker_id:
+        raise ValueError("worker_id is required.")
+    if limit < 1:
+        raise ValueError("limit must be at least one.")
+    initialize_database(database_path)
+    now = _now()
+    claimed_at = _timestamp(now)
+    expired_at = _timestamp(now - timedelta(hours=2))
+    retry_at = _timestamp(now - timedelta(hours=1))
+    with _connection(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        rows = connection.execute(
+            """
+            SELECT channel_key, channel_id
+            FROM profile_queue
+            WHERE digested = 0
+              AND needs_review = 0
+              AND assigned_source = 'socialblade'
+              AND youtube_channel_id IS NULL
+              AND (channel_id_claimed_at IS NULL OR channel_id_claimed_at < ?)
+              AND (
+                  youtube_channel_id_attempted_at IS NULL
+                  OR youtube_channel_id_attempted_at < ?
+              )
+            ORDER BY latest_video_at DESC, channel_key
+            LIMIT ?
+            """,
+            (expired_at, retry_at, limit),
+        ).fetchall()
+        if rows:
+            keys = [row[0] for row in rows]
+            placeholders = ", ".join("?" for _ in keys)
+            connection.execute(
+                f"""
+                UPDATE profile_queue
+                SET channel_id_claimed_by = ?, channel_id_claimed_at = ?,
+                    youtube_channel_id_attempted_at = ?
+                WHERE channel_key IN ({placeholders})
+                """,
+                (worker_id, claimed_at, claimed_at, *keys),
+            )
+        return rows
+
+
+def store_youtube_channel_id(channel_key, youtube_channel_id, database_path=None):
+    if not re.fullmatch(r"UC[\w-]{20,}", youtube_channel_id or ""):
+        raise ValueError("youtube_channel_id must be a canonical UC channel ID.")
+    with _connection(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE profile_queue
+            SET youtube_channel_id = ?, channel_id_claimed_by = NULL,
+                channel_id_claimed_at = NULL
+            WHERE channel_key = ?
+            """,
+            (youtube_channel_id, _channel_key(channel_key)),
+        )
+
+
+def release_channel_id_resolution_batch(worker_id, database_path=None):
+    with _connection(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE profile_queue
+            SET channel_id_claimed_by = NULL, channel_id_claimed_at = NULL
+            WHERE channel_id_claimed_by = ? AND youtube_channel_id IS NULL
+            """,
+            (worker_id,),
+        )
+
+
+def release_profile_batch(source, worker_id, database_path=None):
+    """Release unprocessed work after a source-level failure."""
+    if source not in PROFILE_SOURCES:
+        raise ValueError(f"Unsupported profile source: {source}")
+    with _connection(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE profile_queue
+            SET claimed_by = NULL, claimed_at = NULL
+            WHERE assigned_source = ? AND claimed_by = ? AND digested = 0
+            """,
+            (source, worker_id),
+        )
+
+
+def profile_identifier_candidates(source, channel_id, database_path=None):
+    """Return source-preferred identifiers for a queued channel."""
+    if source not in PROFILE_SOURCES:
+        raise ValueError(f"Unsupported profile source: {source}")
+    with _connection(database_path) as connection:
+        row = connection.execute(
+            """
+            SELECT channel_key, channel_id, youtube_channel_id
+            FROM profile_queue
+            WHERE channel_key = ? OR youtube_channel_id = ?
+            """,
+            (_channel_key(channel_id), channel_id),
+        ).fetchone()
+    if row is None:
+        return [(channel_id, "channel_id" if channel_id.startswith("UC") else "handle")]
+
+    channel_key, handle, youtube_channel_id = row
+    identifiers = (
+        ((handle, "handle"), (youtube_channel_id, "channel_id"))
+        if source == "vidiq"
+        else ((youtube_channel_id, "channel_id"), (handle, "handle"))
+    )
+    candidates = []
+    for identifier, identifier_kind in identifiers:
+        candidate = (identifier, identifier_kind)
+        if identifier and candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
+
+
+def record_collection_attempt(
+    source,
+    channel_id,
+    identifier,
+    identifier_kind,
+    source_url,
+    outcome,
+    failure_type=None,
+    database_path=None,
+):
+    if source not in PROFILE_SOURCES:
+        raise ValueError(f"Unsupported profile source: {source}")
+    if outcome not in {"succeeded", "failed"}:
+        raise ValueError("outcome must be succeeded or failed.")
+    with _connection(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO collection_attempts (
+                occurred_at, source, channel_key, identifier, identifier_kind,
+                source_url, outcome, failure_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _timestamp(),
+                source,
+                _channel_key(channel_id),
+                identifier,
+                identifier_kind,
+                source_url,
+                outcome,
+                failure_type,
+            ),
+        )
+
+
 def mark_profile_succeeded(channel_id, source, database_path=None):
     if source not in PROFILE_SOURCES:
         raise ValueError(f"Unsupported profile source: {source}")
@@ -336,10 +644,11 @@ def mark_profile_succeeded(channel_id, source, database_path=None):
         connection.execute(
             """
             UPDATE profile_queue
-            SET digested = 1, last_success_at = ?, needs_review = 0
-            WHERE channel_key = ? AND assigned_source = ?
+            SET digested = 1, last_success_at = ?, needs_review = 0,
+                claimed_by = NULL, claimed_at = NULL
+            WHERE (channel_key = ? OR youtube_channel_id = ?) AND assigned_source = ?
             """,
-            (_timestamp(), _channel_key(channel_id), source),
+            (_timestamp(), _channel_key(channel_id), channel_id, source),
         )
 
 
@@ -351,23 +660,71 @@ def mark_profile_failed(channel_id, source, database_path=None):
     failed_column = f"{source}_failed"
     with _connection(database_path) as connection:
         connection.execute(
-            f"UPDATE profile_queue SET {failed_column} = 1 WHERE channel_key = ?",
-            (_channel_key(channel_id),),
+            f"""
+            UPDATE profile_queue
+            SET {failed_column} = 1, claimed_by = NULL, claimed_at = NULL
+            WHERE channel_key = ? OR youtube_channel_id = ?
+            """,
+            (_channel_key(channel_id), channel_id),
         )
         row = connection.execute(
-            "SELECT vidiq_failed, socialblade_failed FROM profile_queue WHERE channel_key = ?",
-            (_channel_key(channel_id),),
+            """
+            SELECT vidiq_failed, socialblade_failed
+            FROM profile_queue
+            WHERE channel_key = ? OR youtube_channel_id = ?
+            """,
+            (_channel_key(channel_id), channel_id),
         ).fetchone()
         if row and all(row):
             connection.execute(
-                "UPDATE profile_queue SET digested = 1, needs_review = 1 WHERE channel_key = ?",
-                (_channel_key(channel_id),),
+                """
+                UPDATE profile_queue
+                SET digested = 1, needs_review = 1
+                WHERE channel_key = ? OR youtube_channel_id = ?
+                """,
+                (_channel_key(channel_id), channel_id),
             )
         else:
             connection.execute(
-                "UPDATE profile_queue SET assigned_source = ? WHERE channel_key = ?",
-                (other, _channel_key(channel_id)),
+                """
+                UPDATE profile_queue
+                SET assigned_source = ?
+                WHERE channel_key = ? OR youtube_channel_id = ?
+                """,
+                (other, _channel_key(channel_id), channel_id),
             )
+
+
+def record_collection_error(
+    source,
+    error_type,
+    message,
+    channel_id=None,
+    source_url=None,
+    status_code=None,
+    database_path=None,
+):
+    if source not in PROFILE_SOURCES:
+        raise ValueError(f"Unsupported profile source: {source}")
+    initialize_database(database_path)
+    with _connection(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO collection_errors (
+                occurred_at, source, channel_id, source_url, error_type,
+                status_code, message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _timestamp(),
+                source,
+                channel_id,
+                source_url,
+                error_type,
+                status_code,
+                message,
+            ),
+        )
 
 
 def _insert_metric(table, record, columns, database_path=None):
@@ -398,23 +755,10 @@ def insert_vidiq_channel_stats(record, database_path=None):
     )
 
 
-def insert_socialblade_channel_stats(record, database_path=None):
-    return _insert_metric(
-        "bronze_socialblade_channel_stats",
-        record,
-        (
-            "channel_id", "subscribers", "subscribers_change",
-            "subscribers_change_percentage", "views", "views_change",
-            "views_change_percentage",
-        ),
-        database_path,
-    )
-
-
-def insert_socialblade_daily_channel_metrics(records, database_path=None):
+def insert_socialblade_channel_stats(records, database_path=None):
     return sum(
         _insert_metric(
-            "bronze_socialblade_daily_channel_metrics",
+            "bronze_socialblade_channel_stats",
             record,
             (
                 "channel_id", "subscribers_change", "subscribers_total",

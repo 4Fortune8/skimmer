@@ -21,7 +21,6 @@ rendered-page JSON or ingestion timestamps.
 | `bronze_youtube_skimmed` | YouTube feed items |
 | `bronze_vidiq_channel_stats` | vidIQ channel statistics |
 | `bronze_socialblade_channel_stats` | Social Blade channel statistics |
-| `bronze_socialblade_daily_channel_metrics` | Social Blade daily metrics |
 | `profile_queue` | source-assigned profile collection work |
 
 Feed records are retained for 14 days. The queue marks a profile for collection
@@ -48,7 +47,30 @@ See [RUNBOOK.md](RUNBOOK.md) for setup, execution, and inspection procedures.
 
 ## Automated workflow
 
-`workflow.py` runs the full collection cycle in order: YouTube feed, queue
-refresh, vidIQ profiles, then Social Blade profiles. It waits 30 minutes after
-the cycle completes before starting again. Set `SKIMMER_CYCLE_SECONDS` to
-override that interval for development.
+`workflow.py` runs YouTube feed collection once per hour and keeps the profile
+manager running independently. The manager runs one worker per source; each
+atomically leases up to 100 source-assigned channels, then immediately claims
+the next batch after completing it. Each request remains rate-limited by the
+collector's 15-second delay. Empty workers retry after 60 seconds; source
+failures back off for one hour. SQLite uses WAL mode and a 30-second busy
+timeout so concurrent collectors serialize writes safely.
+
+Failures are retained in `collection_errors`, including Social Blade
+Cloudflare blocks as HTTP 403 records. Set `SKIMMER_CYCLE_SECONDS` to override
+the hourly YouTube interval for development.
+
+Social Blade workers require `profile_queue.youtube_channel_id`, the canonical
+`UC...` identifier. Feed cards store this directly when YouTube exposes a
+`/channel/UC...` link. The profile manager's headless YouTube resolver leases
+unresolved Social Blade handles in batches of 100 and stores the canonical ID
+before Social Blade can claim them.
+
+Each profile source records identifier-level outcomes in `collection_attempts`.
+vidIQ tries the original handle before the canonical ID; Social Blade tries the
+canonical ID before the handle. A source is failed over only after both forms
+fail.
+
+Social Blade defaults to one channel every two minutes through
+`SOCIALBLADE_CHANNEL_DELAY_SECONDS=120` and one page request per 20 seconds
+through `SOCIALBLADE_PAGE_DELAY_SECONDS=20`; both limits apply to failed
+identifier attempts as well as successful collection.

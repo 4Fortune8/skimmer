@@ -6,37 +6,54 @@ import workflow
 
 
 class WorkflowTests(unittest.TestCase):
-    def test_run_cycle_runs_collectors_in_order(self):
+    def test_main_starts_manager_and_runs_youtube_independently(self):
         calls = []
 
         def runner(command, **kwargs):
-            calls.append(command[1])
+            calls.append(command[-1])
 
             class Result:
                 returncode = 0
 
             return Result()
 
-        self.assertTrue(workflow.run_cycle(runner))
-        self.assertEqual(calls, list(workflow.WORKFLOW_SCRIPTS))
+        class Process:
+            def poll(self):
+                return None
 
-    def test_run_cycle_skips_profiles_after_youtube_failure(self):
+        def popen(command, **kwargs):
+            calls.append(command[-1])
+            return Process()
+
+        def sleeper(_):
+            raise RuntimeError("stop test loop")
+
+        with self.assertRaisesRegex(RuntimeError, "stop test loop"):
+            workflow.main(sleeper, popen, runner)
+        self.assertEqual(
+            calls, ["buildProfileManager.py", "youtubeSkimmer.py"]
+        )
+
+    def test_youtube_uses_configured_cpu(self):
         calls = []
 
         def runner(command, **kwargs):
-            calls.append(command[1])
+            calls.append(command)
 
             class Result:
-                returncode = 1
+                returncode = 0
 
             return Result()
 
-        self.assertFalse(workflow.run_cycle(runner))
-        self.assertEqual(calls, ["youtubeSkimmer.py"])
+        with patch.dict(os.environ, {"SKIMMER_YOUTUBE_CPU": "0"}):
+            self.assertTrue(workflow.run_script("youtubeSkimmer.py", runner))
+        self.assertEqual(
+            calls, [["taskset", "-c", "0", workflow.sys.executable, "youtubeSkimmer.py"]]
+        )
 
-    def test_cycle_seconds_defaults_to_thirty_minutes(self):
+    def test_cycle_seconds_defaults_to_one_hour(self):
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(workflow.cycle_seconds(), 1800)
+            self.assertEqual(workflow.cycle_seconds(), 3600)
 
 
 if __name__ == "__main__":
