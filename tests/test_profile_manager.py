@@ -2,13 +2,13 @@ import os
 import unittest
 from unittest.mock import patch
 
-import buildProfileManager
+from skimmer.services import profile_manager
 
 
 class ProfileManagerTests(unittest.TestCase):
     def test_socialblade_cloudflare_block_uses_dedicated_cooldown(self):
         class BlockedResult:
-            returncode = buildProfileManager.CLOUDFLARE_BLOCK_EXIT_CODE
+            returncode = profile_manager.CLOUDFLARE_BLOCK_EXIT_CODE
 
         sleeps = []
 
@@ -25,8 +25,8 @@ class ProfileManagerTests(unittest.TestCase):
             clear=True,
         ):
             with self.assertRaisesRegex(RuntimeError, "stop test loop"):
-                buildProfileManager.worker_loop(
-                    "socialblade", "buildIDProfile-old.py", runner, sleeper
+                profile_manager.worker_loop(
+                    "socialblade", "skimmer.collectors.socialblade", runner, sleeper
                 )
 
         self.assertEqual(sleeps, [1234])

@@ -21,7 +21,8 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
-from bronze_store import insert_youtube_skimmed, refresh_profile_queue
+from skimmer.config import PROJECT_ROOT
+from skimmer.storage.bronze import insert_youtube_skimmed, refresh_profile_queue
 # Initialize the Firefox webdriver
  
 
@@ -61,7 +62,7 @@ def resolve_geckodriver_path():
             f"Unsupported architecture for automatic geckodriver download: {machine}"
         )
 
-    target_dir = Path(__file__).resolve().parent / ".drivers"
+    target_dir = PROJECT_ROOT / ".drivers"
     target_dir.mkdir(parents=True, exist_ok=True)
     driver_path = target_dir / "geckodriver"
     if driver_path.exists():
@@ -107,7 +108,7 @@ def resolve_firefox_binary_path():
             return str(configured_path)
         raise RuntimeError(f"FIREFOX_BINARY_PATH is not usable: {configured_path}")
 
-    target_dir = Path(__file__).resolve().parent / ".drivers"
+    target_dir = PROJECT_ROOT / ".drivers"
     target_dir.mkdir(parents=True, exist_ok=True)
 
     local_binary = target_dir / "firefox" / "firefox"
@@ -301,11 +302,18 @@ def collect_youtube_feed():
         driver.quit()
 
 
-if __name__ == "__main__":
+def main():
     collect_youtube_feed()
-    raise SystemExit
+    return 0
 
 
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+# Legacy exploratory collector retained as inert source history during the
+# package migration. The supported implementation is collect_youtube_feed above.
+"""
 driver = create_driver()
 
 
@@ -531,3 +539,4 @@ for data in dataset:
 
 insert_youtube_skimmed(bronze_records, "youtube.com")
 driver.close()
+"""

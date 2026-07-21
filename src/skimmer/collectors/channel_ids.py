@@ -5,7 +5,8 @@ import re
 import time
 from pathlib import Path
 
-from bronze_store import (
+from skimmer.config import PROJECT_ROOT
+from skimmer.storage.bronze import (
     claim_channel_id_resolution_batch,
     release_channel_id_resolution_batch,
     store_youtube_channel_id,
@@ -21,7 +22,7 @@ def create_driver():
     options = Options()
     options.set_preference("media.volume_scale", "0.0")
     options.add_argument("-headless")
-    project_root = Path(__file__).resolve().parent
+    project_root = PROJECT_ROOT
     firefox_path = os.environ.get(
         "FIREFOX_BINARY_PATH", project_root / ".drivers" / "firefox" / "firefox"
     )
@@ -84,6 +85,10 @@ def resolve_channel_ids():
         driver.quit()
 
 
-if __name__ == "__main__":
+def main():
     result = resolve_channel_ids()
-    raise SystemExit(2 if result is None else 0)
+    return 2 if result is None else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

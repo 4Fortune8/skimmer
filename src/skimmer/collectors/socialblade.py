@@ -5,7 +5,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from bronze_store import (
+from skimmer.config import PROJECT_ROOT
+from skimmer.storage.bronze import (
     claim_profile_batch,
     insert_socialblade_channel_stats,
     mark_profile_failed,
@@ -15,7 +16,7 @@ from bronze_store import (
     record_collection_error,
     release_profile_batch,
 )
-from profile_normalization import normalize_channel_profile, print_normalized_profile
+from skimmer.domain.normalization import normalize_channel_profile, print_normalized_profile
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
@@ -118,7 +119,7 @@ def create_driver():
     profile_directory = Path(
         os.environ.get(
             "SOCIALBLADE_FIREFOX_PROFILE_DIR",
-            Path(__file__).resolve().parent / ".socialblade-firefox-profile",
+            PROJECT_ROOT / ".socialblade-firefox-profile",
         )
     ).expanduser()
     profile_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -127,11 +128,11 @@ def create_driver():
     options.add_argument(str(profile_directory.resolve()))
     firefox_path = os.environ.get(
         "FIREFOX_BINARY_PATH",
-        Path(__file__).resolve().parent / ".drivers" / "firefox" / "firefox",
+        PROJECT_ROOT / ".drivers" / "firefox" / "firefox",
     )
     geckodriver_path = os.environ.get(
         "GECKODRIVER_PATH",
-        Path(__file__).resolve().parent / ".drivers" / "geckodriver",
+        PROJECT_ROOT / ".drivers" / "geckodriver",
     )
     options.binary_location = str(firefox_path)
     if os.environ.get("SOCIALBLADE_HEADLESS", "").lower() in {"1", "true", "yes"}:
@@ -144,7 +145,7 @@ def socialblade_profile_lock():
     profile_directory = Path(
         os.environ.get(
             "SOCIALBLADE_FIREFOX_PROFILE_DIR",
-            Path(__file__).resolve().parent / ".socialblade-firefox-profile",
+            PROJECT_ROOT / ".socialblade-firefox-profile",
         )
     ).expanduser()
     profile_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -362,10 +363,14 @@ def collect_socialblade_stats():
             driver.quit()
 
 
-if __name__ == "__main__":
+def main():
     result = collect_socialblade_stats()
-    raise SystemExit(
+    return (
         result
         if result == CLOUDFLARE_BLOCK_EXIT_CODE
         else 2 if result is None else 0
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

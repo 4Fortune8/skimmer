@@ -7,7 +7,8 @@ import os
 import re
 from pathlib import Path
 
-from bronze_store import (
+from skimmer.config import PROJECT_ROOT
+from skimmer.storage.bronze import (
     claim_profile_batch,
     get_profile_queue,
     insert_vidiq_channel_profile,
@@ -18,7 +19,7 @@ from bronze_store import (
     record_collection_attempt,
     record_collection_error,
 )
-from profile_normalization import normalize_channel_profile, print_normalized_profile
+from skimmer.domain.normalization import normalize_channel_profile, print_normalized_profile
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
@@ -177,11 +178,11 @@ def create_driver():
     options.set_preference("media.volume_scale", "0.0")
     firefox_path = os.environ.get(
         "FIREFOX_BINARY_PATH",
-        Path(__file__).resolve().parent / ".drivers" / "firefox" / "firefox",
+        PROJECT_ROOT / ".drivers" / "firefox" / "firefox",
     )
     geckodriver_path = os.environ.get(
         "GECKODRIVER_PATH",
-        Path(__file__).resolve().parent / ".drivers" / "geckodriver",
+        PROJECT_ROOT / ".drivers" / "geckodriver",
     )
     options.binary_location = str(firefox_path)
     if os.environ.get("VIDIQ_HEADLESS", "").lower() in {"1", "true", "yes"}:
@@ -393,6 +394,10 @@ class BlogSpider(scrapy.Spider):
 
 
 
-if __name__ == "__main__":
+def main():
     result = collect_vidiq_stats()
-    raise SystemExit(2 if result is None else 0)
+    return 2 if result is None else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -8,8 +8,9 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from skimmer.config import PROJECT_ROOT
 
-DEFAULT_DATABASE_PATH = Path(__file__).resolve().parent / "data" / "skimmer.db"
+DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "skimmer.db"
 PROFILE_SOURCES = {"vidiq", "socialblade"}
 
 

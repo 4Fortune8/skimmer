@@ -7,10 +7,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from skimmer.config import PROJECT_ROOT
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-YOUTUBE_SCRIPT = "youtubeSkimmer.py"
-PROFILE_MANAGER_SCRIPT = "buildProfileManager.py"
+YOUTUBE_MODULE = "skimmer.collectors.youtube"
+PROFILE_MANAGER_MODULE = "skimmer.services.profile_manager"
 DEFAULT_CYCLE_SECONDS = 60 * 60
 
 
@@ -25,11 +25,11 @@ def cycle_seconds():
     return seconds
 
 
-def run_script(script_name, runner=subprocess.run):
-    print(f"[{datetime.now(timezone.utc).isoformat()}] Starting {script_name}.")
-    command = [sys.executable, script_name]
+def run_module(module_name, runner=subprocess.run):
+    print(f"[{datetime.now(timezone.utc).isoformat()}] Starting {module_name}.")
+    command = [sys.executable, "-m", module_name]
     youtube_cpu = os.environ.get("SKIMMER_YOUTUBE_CPU")
-    if script_name == YOUTUBE_SCRIPT and youtube_cpu:
+    if module_name == YOUTUBE_MODULE and youtube_cpu:
         command = ["taskset", "-c", youtube_cpu, *command]
     result = runner(
         command,
@@ -38,15 +38,15 @@ def run_script(script_name, runner=subprocess.run):
         check=False,
     )
     if result.returncode:
-        print(f"{script_name} failed with exit code {result.returncode}.")
+        print(f"{module_name} failed with exit code {result.returncode}.")
         return False
     return True
 
 
 def start_profile_manager(popen=subprocess.Popen):
-    print(f"[{datetime.now(timezone.utc).isoformat()}] Starting {PROFILE_MANAGER_SCRIPT}.")
+    print(f"[{datetime.now(timezone.utc).isoformat()}] Starting {PROFILE_MANAGER_MODULE}.")
     return popen(
-        [sys.executable, PROFILE_MANAGER_SCRIPT],
+        [sys.executable, "-m", PROFILE_MANAGER_MODULE],
         cwd=PROJECT_ROOT,
         env=os.environ.copy(),
     )
@@ -59,7 +59,7 @@ def main(sleeper=time.sleep, popen=subprocess.Popen, runner=subprocess.run):
         if profile_manager.poll() is not None:
             print("Profile manager exited; restarting it.")
             profile_manager = start_profile_manager(popen)
-        run_script(YOUTUBE_SCRIPT, runner)
+        run_module(YOUTUBE_MODULE, runner)
         print(f"Sleeping for {interval} seconds before the next YouTube collection.")
         sleeper(interval)
 

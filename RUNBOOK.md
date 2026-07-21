@@ -5,11 +5,11 @@
 Install the project’s collector dependencies in the Python environment:
 
 ```bash
-python -m pip install selenium scrapy beautifulsoup4
+python -m pip install -e ".[analysis]"
 ```
 
 The YouTube, vidIQ, and Social Blade collectors render pages with Firefox and
-geckodriver. `youtubeSkimmer.py` automatically uses a configured
+geckodriver. `skimmer-youtube` automatically uses a configured
 `GECKODRIVER_PATH` or `FIREFOX_BINARY_PATH`; otherwise it uses an installed
 browser/driver or downloads them into `.drivers/`. Configure those variables
 for the profile collectors when their default `.drivers` paths are unsuitable.
@@ -31,14 +31,14 @@ collectors. Do not place the database in a directory served publicly.
 1. Collect YouTube feed data:
 
    ```bash
-   python youtubeSkimmer.py
+   skimmer-youtube
    ```
 
 2. Refresh and inspect the profile queue. This is normally run automatically
    at the end of the YouTube collector:
 
    ```bash
-   python buildProfileManager.py
+   skimmer-profile-manager
    ```
 
 3. Collect the source-assigned profile metrics. Each collector waits 15 seconds
@@ -46,8 +46,8 @@ collectors. Do not place the database in a directory served publicly.
    source; a second failure marks it for review rather than re-queueing it:
 
    ```bash
-   python buildIDProfile.py
-   python buildIDProfile-old.py
+   skimmer-vidiq
+   skimmer-socialblade
    ```
 
 All collector output is written to SQLite. Profile metrics are deduplicated by
@@ -64,7 +64,7 @@ Run the looping workflow manually with:
 
 ```bash
 YOUTUBE_HEADLESS=false VIDIQ_HEADLESS=true SOCIALBLADE_HEADLESS=false \
-  xvfb-run -a -s "-screen 0 1920x1080x24" python workflow.py
+  xvfb-run -a -s "-screen 0 1920x1080x24" skimmer-workflow
 ```
 
 It runs YouTube collection once per hour. The profile manager runs independently
@@ -80,7 +80,7 @@ that delay with `SKIMMER_CHANNEL_ID_RESOLUTION_DELAY_SECONDS`.
 To start it automatically on this host:
 
 ```bash
-sudo cp systemd/skimmer-workflow.service /etc/systemd/system/
+sudo cp deploy/systemd/skimmer-workflow.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now skimmer-workflow.service
 ```
@@ -128,7 +128,7 @@ If Firefox cannot start, configure both `FIREFOX_BINARY_PATH` and
 hosts where YouTube must still run in headed mode, use
 `xvfb-run -a -s "-screen 0 1920x1080x24"` with `YOUTUBE_HEADLESS=false`.
 
-If a collector has no work, run `python buildProfileManager.py` and inspect
+If a collector has no work, run `skimmer-profile-manager` and inspect
 `profile_queue`; completed channels remain digested until they are eligible
 again after seven days or a newly seen video.
 

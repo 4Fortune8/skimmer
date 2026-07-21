@@ -8,12 +8,12 @@ import threading
 import time
 from pathlib import Path
 
+from skimmer.config import PROJECT_ROOT
 
-PROJECT_ROOT = Path(__file__).resolve().parent
 WORKERS = {
-    "youtube-channel-id": "resolveYouTubeChannelIds.py",
-    "vidiq": "buildIDProfile.py",
-    "socialblade": "buildIDProfile-old.py",
+    "youtube-channel-id": "skimmer.collectors.channel_ids",
+    "vidiq": "skimmer.collectors.vidiq",
+    "socialblade": "skimmer.collectors.socialblade",
 }
 DEFAULT_BATCH_SIZE = 100
 DEFAULT_EMPTY_QUEUE_SECONDS = 60
@@ -49,7 +49,7 @@ def worker_loop(source, script_name, runner=subprocess.run, sleeper=time.sleep):
 
     while True:
         result = runner(
-            [sys.executable, script_name],
+            [sys.executable, "-m", script_name],
             cwd=PROJECT_ROOT,
             env=environment,
             check=False,

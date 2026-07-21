@@ -1,11 +1,10 @@
-import importlib.util
 import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from bronze_store import (
+from skimmer.storage.bronze import (
     get_profile_queue,
     claim_profile_batch,
     claim_channel_id_resolution_batch,
@@ -26,19 +25,8 @@ from bronze_store import (
 )
 
 
-SOCIALBLADE_MODULE_SPEC = importlib.util.spec_from_file_location(
-    "socialblade_collector",
-    Path(__file__).parents[1] / "buildIDProfile-old.py",
-)
-socialblade_collector = importlib.util.module_from_spec(SOCIALBLADE_MODULE_SPEC)
-SOCIALBLADE_MODULE_SPEC.loader.exec_module(socialblade_collector)
-
-VIDIQ_MODULE_SPEC = importlib.util.spec_from_file_location(
-    "vidiq_collector",
-    Path(__file__).parents[1] / "buildIDProfile.py",
-)
-vidiq_collector = importlib.util.module_from_spec(VIDIQ_MODULE_SPEC)
-VIDIQ_MODULE_SPEC.loader.exec_module(vidiq_collector)
+from skimmer.collectors import socialblade as socialblade_collector
+from skimmer.collectors import vidiq as vidiq_collector
 
 
 class BronzeStoreTests(unittest.TestCase):

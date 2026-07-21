@@ -32,19 +32,29 @@ from both sources remain marked for review.
 ## Collectors
 
 ```bash
-python youtubeSkimmer.py
-python buildProfileManager.py
-python buildIDProfile.py
-python buildIDProfile-old.py
+python -m pip install -e ".[analysis]"
+skimmer-youtube
+skimmer-profile-manager
+skimmer-vidiq
+skimmer-socialblade
 ```
 
-`youtubeSkimmer.py` refreshes `profile_queue` after it stores the feed.
-`buildProfileManager.py` can also refresh and inspect the source-balanced
+`skimmer-youtube` refreshes `profile_queue` after it stores the feed.
+`skimmer-profile-manager` can also refresh and inspect the source-balanced
 queue. The two profile collectors read only their assigned queue entries,
 pause 15 seconds between channel requests, and mark a queue entry complete
 only after a successful metric insert.
 
 See [RUNBOOK.md](RUNBOOK.md) for setup, execution, and inspection procedures.
+
+## Project layout
+
+Production code lives in `src/skimmer/`: collectors render source pages,
+`storage` owns SQLite persistence and queue state, `domain` holds shared
+normalization, and `services` orchestrates long-running workers. Legacy data
+conversion and analysis scripts are in `scripts/`; deployment assets are in
+`deploy/`; notebooks remain at the repository root until their analysis
+workflow is migrated.
 
 ## Automated workflow
 

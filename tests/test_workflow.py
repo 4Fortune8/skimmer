@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-import workflow
+from skimmer.services import workflow
 
 
 class WorkflowTests(unittest.TestCase):
@@ -31,7 +31,7 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "stop test loop"):
             workflow.main(sleeper, popen, runner)
         self.assertEqual(
-            calls, ["buildProfileManager.py", "youtubeSkimmer.py"]
+            calls, ["skimmer.services.profile_manager", "skimmer.collectors.youtube"]
         )
 
     def test_youtube_uses_configured_cpu(self):
@@ -46,9 +46,17 @@ class WorkflowTests(unittest.TestCase):
             return Result()
 
         with patch.dict(os.environ, {"SKIMMER_YOUTUBE_CPU": "0"}):
-            self.assertTrue(workflow.run_script("youtubeSkimmer.py", runner))
+            self.assertTrue(workflow.run_module("skimmer.collectors.youtube", runner))
         self.assertEqual(
-            calls, [["taskset", "-c", "0", workflow.sys.executable, "youtubeSkimmer.py"]]
+            calls,
+            [[
+                "taskset",
+                "-c",
+                "0",
+                workflow.sys.executable,
+                "-m",
+                "skimmer.collectors.youtube",
+            ]],
         )
 
     def test_cycle_seconds_defaults_to_one_hour(self):
