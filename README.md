@@ -20,6 +20,7 @@ rendered-page JSON or ingestion timestamps.
 | --- | --- |
 | `bronze_youtube_skimmed` | YouTube feed items |
 | `bronze_vidiq_channel_stats` | vidIQ channel statistics |
+| `bronze_vidiq_channel_profiles` | vidIQ channel profile details and content mix |
 | `bronze_socialblade_channel_stats` | Social Blade channel statistics |
 | `profile_queue` | source-assigned profile collection work |
 
@@ -73,4 +74,7 @@ fail.
 Social Blade defaults to one channel every two minutes through
 `SOCIALBLADE_CHANNEL_DELAY_SECONDS=120` and one page request per 20 seconds
 through `SOCIALBLADE_PAGE_DELAY_SECONDS=20`; both limits apply to failed
-identifier attempts as well as successful collection.
+identifier attempts as well as successful collection. It uses the dedicated,
+persistent Firefox profile in `SOCIALBLADE_FIREFOX_PROFILE_DIR`. A Cloudflare
+block releases the leased queue and starts a six-hour source-wide cooldown;
+adjust it with `SOCIALBLADE_CLOUDFLARE_BACKOFF_SECONDS`.

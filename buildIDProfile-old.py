@@ -1,6 +1,8 @@
+import fcntl
 import os
 import re
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from bronze_store import (
@@ -21,6 +23,9 @@ from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.support.wait import WebDriverWait
+
+
+CLOUDFLARE_BLOCK_EXIT_CODE = 3
 
 
 def convert_compact_number(value):
@@ -110,6 +115,16 @@ def parse_daily_metrics(channel_id, rows):
 def create_driver():
     options = Options()
     options.set_preference("media.volume_scale", "0.0")
+    profile_directory = Path(
+        os.environ.get(
+            "SOCIALBLADE_FIREFOX_PROFILE_DIR",
+            Path(__file__).resolve().parent / ".socialblade-firefox-profile",
+        )
+    ).expanduser()
+    profile_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    profile_directory.chmod(0o700)
+    options.add_argument("-profile")
+    options.add_argument(str(profile_directory.resolve()))
     firefox_path = os.environ.get(
         "FIREFOX_BINARY_PATH",
         Path(__file__).resolve().parent / ".drivers" / "firefox" / "firefox",
@@ -124,205 +139,233 @@ def create_driver():
     return webdriver.Firefox(service=Service(str(geckodriver_path)), options=options)
 
 
+@contextmanager
+def socialblade_profile_lock():
+    profile_directory = Path(
+        os.environ.get(
+            "SOCIALBLADE_FIREFOX_PROFILE_DIR",
+            Path(__file__).resolve().parent / ".socialblade-firefox-profile",
+        )
+    ).expanduser()
+    profile_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    profile_directory.chmod(0o700)
+    lock_path = profile_directory.with_name(f"{profile_directory.name}.lock")
+    with lock_path.open("w") as lock_file:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(
+                "Social Blade Firefox profile is already in use."
+            ) from exc
+        yield
+
+
 def collect_socialblade_stats():
     channel_limit = int(
-        os.environ.get("SKIMMER_BATCH_SIZE", os.environ.get("SKIMMER_CHANNEL_LIMIT", "100"))
+        os.environ.get(
+            "SKIMMER_BATCH_SIZE", os.environ.get("SKIMMER_CHANNEL_LIMIT", "100")
+        )
     )
     if channel_limit < 1:
         channel_limit = 100
-    worker_id = os.environ.get("SKIMMER_WORKER_ID", f"socialblade-{os.getpid()}")
-    channel_ids = claim_profile_batch("socialblade", worker_id, channel_limit)
-    print(f"Social Blade collection queue size: {len(channel_ids)}")
-    if not channel_ids:
-        print("No unprocessed channels found for Social Blade collector.")
-        return None
+    with socialblade_profile_lock():
+        worker_id = os.environ.get("SKIMMER_WORKER_ID", f"socialblade-{os.getpid()}")
+        channel_ids = claim_profile_batch("socialblade", worker_id, channel_limit)
+        print(f"Social Blade collection queue size: {len(channel_ids)}")
+        if not channel_ids:
+            print("No unprocessed channels found for Social Blade collector.")
+            return None
 
-    channel_delay_seconds = int(
-        os.environ.get("SOCIALBLADE_CHANNEL_DELAY_SECONDS", "120")
-    )
-    page_delay_seconds = int(
-        os.environ.get("SOCIALBLADE_PAGE_DELAY_SECONDS", "20")
-    )
-    if channel_delay_seconds < 1 or page_delay_seconds < 1:
-        raise ValueError("Social Blade rate limits must be at least one second.")
-    driver = create_driver()
-    driver.set_page_load_timeout(60)
-    last_channel_at = None
-    last_request_at = None
-    try:
-        for channel_id in channel_ids:
-            profile_stored = False
-            for attempt_index, (identifier, identifier_kind) in enumerate(
-                profile_identifier_candidates(
-                "socialblade", channel_id
-                )
-            ):
-                if attempt_index == 0 and last_channel_at is not None:
-                    elapsed = time.monotonic() - last_channel_at
-                    if elapsed < channel_delay_seconds:
-                        time.sleep(channel_delay_seconds - elapsed)
-                if last_request_at is not None:
-                    elapsed = time.monotonic() - last_request_at
-                    if elapsed < page_delay_seconds:
-                        time.sleep(page_delay_seconds - elapsed)
-                source_url = socialblade_url(identifier)
-                try:
-                    last_request_at = time.monotonic()
-                    if attempt_index == 0:
-                        last_channel_at = last_request_at
-                    driver.get(source_url)
-                    WebDriverWait(driver, 30).until(
-                        EC.presence_of_element_located(
-                            (By.XPATH, "//*[normalize-space()='Subscribers']")
+        channel_delay_seconds = int(
+            os.environ.get("SOCIALBLADE_CHANNEL_DELAY_SECONDS", "120")
+        )
+        page_delay_seconds = int(
+            os.environ.get("SOCIALBLADE_PAGE_DELAY_SECONDS", "20")
+        )
+        if channel_delay_seconds < 1 or page_delay_seconds < 1:
+            raise ValueError("Social Blade rate limits must be at least one second.")
+        driver = create_driver()
+        driver.set_page_load_timeout(60)
+        last_channel_at = None
+        last_request_at = None
+        try:
+            for channel_id in channel_ids:
+                profile_stored = False
+                for attempt_index, (identifier, identifier_kind) in enumerate(
+                    profile_identifier_candidates("socialblade", channel_id)
+                ):
+                    if attempt_index == 0 and last_channel_at is not None:
+                        elapsed = time.monotonic() - last_channel_at
+                        if elapsed < channel_delay_seconds:
+                            time.sleep(channel_delay_seconds - elapsed)
+                    if last_request_at is not None:
+                        elapsed = time.monotonic() - last_request_at
+                        if elapsed < page_delay_seconds:
+                            time.sleep(page_delay_seconds - elapsed)
+                    source_url = socialblade_url(identifier)
+                    try:
+                        last_request_at = time.monotonic()
+                        if attempt_index == 0:
+                            last_channel_at = last_request_at
+                        driver.get(source_url)
+                        WebDriverWait(driver, 30).until(
+                            EC.presence_of_element_located(
+                                (By.XPATH, "//*[normalize-space()='Subscribers']")
+                            )
                         )
-                    )
-                    lines = [
-                        line.strip()
-                        for line in driver.find_element(By.TAG_NAME, "body").text.splitlines()
-                        if line.strip()
-                    ]
-                except TimeoutException:
-                    if is_cloudflare_blocked(driver):
+                        lines = [
+                            line.strip()
+                            for line in driver.find_element(
+                                By.TAG_NAME, "body"
+                            ).text.splitlines()
+                            if line.strip()
+                        ]
+                    except TimeoutException:
+                        if is_cloudflare_blocked(driver):
+                            record_collection_error(
+                                "socialblade",
+                                "cloudflare_block",
+                                "Cloudflare blocked the headed browser session.",
+                                channel_id,
+                                source_url,
+                                403,
+                            )
+                            release_profile_batch("socialblade", worker_id)
+                            print(
+                                "Social Blade is blocked by Cloudflare; "
+                                "leaving the collection queue unchanged."
+                            )
+                            return CLOUDFLARE_BLOCK_EXIT_CODE
                         record_collection_error(
                             "socialblade",
-                            "cloudflare_block",
-                            "Cloudflare blocked the headed browser session.",
+                            "page_load_timeout",
+                            "Timed out waiting for the Subscribers metric.",
                             channel_id,
                             source_url,
-                            403,
                         )
-                        release_profile_batch("socialblade", worker_id)
-                        print(
-                            "Social Blade is blocked by Cloudflare; "
-                            "leaving the collection queue unchanged."
+                        record_collection_attempt(
+                            "socialblade",
+                            channel_id,
+                            identifier,
+                            identifier_kind,
+                            source_url,
+                            "failed",
+                            "page_load_timeout",
                         )
-                        return False
-                    record_collection_error(
-                        "socialblade",
-                        "page_load_timeout",
-                        "Timed out waiting for the Subscribers metric.",
-                        channel_id,
-                        source_url,
-                    )
-                    record_collection_attempt(
-                        "socialblade",
-                        channel_id,
-                        identifier,
-                        identifier_kind,
-                        source_url,
-                        "failed",
-                        "page_load_timeout",
-                    )
-                    continue
-                if not {"Subscribers", "Views", "CREATOR STATISTICS"}.issubset(lines):
-                    record_collection_error(
-                        "socialblade",
-                        "metrics_unavailable",
-                        "The expected Social Blade metrics were not rendered.",
-                        channel_id,
-                        source_url,
-                    )
-                    record_collection_attempt(
-                        "socialblade",
-                        channel_id,
-                        identifier,
-                        identifier_kind,
-                        source_url,
-                        "failed",
-                        "metrics_unavailable",
-                    )
-                    continue
+                        continue
+                    if not {"Subscribers", "Views", "CREATOR STATISTICS"}.issubset(lines):
+                        record_collection_error(
+                            "socialblade",
+                            "metrics_unavailable",
+                            "The expected Social Blade metrics were not rendered.",
+                            channel_id,
+                            source_url,
+                        )
+                        record_collection_attempt(
+                            "socialblade",
+                            channel_id,
+                            identifier,
+                            identifier_kind,
+                            source_url,
+                            "failed",
+                            "metrics_unavailable",
+                        )
+                        continue
 
-                subscribers = value_after_label(lines, "Subscribers")
-                views = value_after_label(lines, "Views")
-                creator_statistics_index = lines.index("CREATOR STATISTICS")
-                creator_statistics = lines[creator_statistics_index + 1 :]
-                subscribers_change = value_before_label(
-                    creator_statistics, "Subscribers for the last 30 days"
-                )
-                views_change = value_before_label(
-                    creator_statistics, "Views for the last 30 days"
-                )
-                normalized_profile = normalize_channel_profile(
-                    source="socialblade",
-                    channel_id=channel_id,
-                    subscribers_total=convert_compact_number(subscribers),
-                    subscribers_change=convert_compact_number(subscribers_change),
-                    views_total=convert_compact_number(views),
-                    views_change=convert_compact_number(views_change),
-                    source_url=source_url,
-                    raw_rendered_text=lines,
-                )
-                print_normalized_profile(normalized_profile)
-                try:
-                    daily_rows = WebDriverWait(driver, 30).until(
-                        lambda browser: browser.execute_script(
-                            """
-                            const table = Array.from(document.querySelectorAll('table')).find(
-                                (candidate) => candidate.innerText.startsWith(
-                                    'Date\\tSubscribers\\tViews\\tVideos\\tEstimated Earnings'
-                                )
-                            );
-                            if (!table || table.rows.length < 2) {
-                                return null;
-                            }
-                            return Array.from(table.rows)
-                                .slice(1)
-                                .map((row) =>
-                                    Array.from(row.cells).map((cell) => cell.innerText.trim())
+                    subscribers = value_after_label(lines, "Subscribers")
+                    views = value_after_label(lines, "Views")
+                    creator_statistics_index = lines.index("CREATOR STATISTICS")
+                    creator_statistics = lines[creator_statistics_index + 1 :]
+                    subscribers_change = value_before_label(
+                        creator_statistics, "Subscribers for the last 30 days"
+                    )
+                    views_change = value_before_label(
+                        creator_statistics, "Views for the last 30 days"
+                    )
+                    normalized_profile = normalize_channel_profile(
+                        source="socialblade",
+                        channel_id=channel_id,
+                        subscribers_total=convert_compact_number(subscribers),
+                        subscribers_change=convert_compact_number(subscribers_change),
+                        views_total=convert_compact_number(views),
+                        views_change=convert_compact_number(views_change),
+                        source_url=source_url,
+                        raw_rendered_text=lines,
+                    )
+                    print_normalized_profile(normalized_profile)
+                    try:
+                        daily_rows = WebDriverWait(driver, 30).until(
+                            lambda browser: browser.execute_script(
+                                """
+                                const table = Array.from(document.querySelectorAll('table')).find(
+                                    (candidate) => candidate.innerText.startsWith(
+                                        'Date\\tSubscribers\\tViews\\tVideos\\tEstimated Earnings'
+                                    )
                                 );
-                            """
+                                if (!table || table.rows.length < 2) {
+                                    return null;
+                                }
+                                return Array.from(table.rows)
+                                    .slice(1)
+                                    .map((row) =>
+                                        Array.from(row.cells).map((cell) => cell.innerText.trim())
+                                    );
+                                """
+                            )
                         )
-                    )
-                except TimeoutException:
-                    daily_rows = []
-                daily_records = parse_daily_metrics(channel_id, daily_rows)
-                if not daily_records:
-                    record_collection_error(
-                        "socialblade",
-                        "daily_metrics_unavailable",
-                        "Social Blade rendered no daily metric records.",
-                        channel_id,
-                        source_url,
-                    )
+                    except TimeoutException:
+                        daily_rows = []
+                    daily_records = parse_daily_metrics(channel_id, daily_rows)
+                    if not daily_records:
+                        record_collection_error(
+                            "socialblade",
+                            "daily_metrics_unavailable",
+                            "Social Blade rendered no daily metric records.",
+                            channel_id,
+                            source_url,
+                        )
+                        record_collection_attempt(
+                            "socialblade",
+                            channel_id,
+                            identifier,
+                            identifier_kind,
+                            source_url,
+                            "failed",
+                            "daily_metrics_unavailable",
+                        )
+                        continue
+                    inserted_stats = insert_socialblade_channel_stats(daily_records)
                     record_collection_attempt(
                         "socialblade",
                         channel_id,
                         identifier,
                         identifier_kind,
                         source_url,
-                        "failed",
-                        "daily_metrics_unavailable",
+                        "succeeded",
                     )
-                    continue
-                inserted_stats = insert_socialblade_channel_stats(daily_records)
-                record_collection_attempt(
-                    "socialblade",
-                    channel_id,
-                    identifier,
-                    identifier_kind,
-                    source_url,
-                    "succeeded",
-                )
-                mark_profile_succeeded(channel_id, "socialblade")
-                print(f"Stored Social Blade stats for {channel_id}.")
-                print(
-                    "Stored "
-                    f"{inserted_stats} new Social Blade metric rows from "
-                    f"{len(daily_records)} rendered rows."
-                )
-                profile_stored = True
-                break
-            if not profile_stored:
-                print(
-                    f"Skipped Social Blade profile for {channel_id}: all identifiers failed."
-                )
-                mark_profile_failed(channel_id, "socialblade")
-        return True
-    finally:
-        driver.quit()
+                    mark_profile_succeeded(channel_id, "socialblade")
+                    print(f"Stored Social Blade stats for {channel_id}.")
+                    print(
+                        "Stored "
+                        f"{inserted_stats} new Social Blade metric rows from "
+                        f"{len(daily_records)} rendered rows."
+                    )
+                    profile_stored = True
+                    break
+                if not profile_stored:
+                    print(
+                        f"Skipped Social Blade profile for {channel_id}: all identifiers failed."
+                    )
+                    mark_profile_failed(channel_id, "socialblade")
+            return True
+        finally:
+            driver.quit()
 
 
 if __name__ == "__main__":
     result = collect_socialblade_stats()
-    raise SystemExit(1 if result is False else 2 if result is None else 0)
+    raise SystemExit(
+        result
+        if result == CLOUDFLARE_BLOCK_EXIT_CODE
+        else 2 if result is None else 0
+    )

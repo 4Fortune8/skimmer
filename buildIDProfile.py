@@ -10,6 +10,7 @@ from pathlib import Path
 from bronze_store import (
     claim_profile_batch,
     get_profile_queue,
+    insert_vidiq_channel_profile,
     insert_vidiq_channel_stats,
     mark_profile_failed,
     mark_profile_succeeded,
@@ -107,6 +108,70 @@ def metric_value(lines, label):
         return None
 
 
+def metrics_between_labels(lines, start_label, end_label):
+    try:
+        start = lines.index(start_label) + 1
+        end = lines.index(end_label, start)
+    except ValueError:
+        return []
+    return lines[start:end]
+
+
+def long_form_vs_shorts_metrics(lines):
+    try:
+        section_start = lines.index("Long-form vs Shorts")
+    except ValueError:
+        return {}
+    section = lines[section_start:]
+    try:
+        uploads = metrics_between_labels(section, "Uploads", "Views")
+    except ValueError:
+        uploads = []
+    views = metrics_between_labels(section, "Views", "Subscribers")
+    return {
+        "content_period": section[1] if len(section) > 1 and section[1].startswith("Since ") else None,
+        "long_form_uploads": convert_compact_number(metric_value(uploads, "Long-form")),
+        "shorts_uploads": convert_compact_number(metric_value(uploads, "Shorts")),
+        "long_form_views": convert_compact_number(metric_value(views, "Long-form")),
+        "shorts_views": convert_compact_number(metric_value(views, "Shorts")),
+    }
+
+
+def vidiq_rankings(lines):
+    try:
+        ranking_index = lines.index("Ranking (30 days)")
+    except ValueError:
+        return None, None
+    rankings = lines[ranking_index + 1 : ranking_index + 3]
+    return (
+        rankings[0] if len(rankings) > 0 else None,
+        rankings[1] if len(rankings) > 1 else None,
+    )
+
+
+def vidiq_about_details(driver):
+    WebDriverWait(driver, 15).until(
+        EC.element_to_be_clickable(
+            (By.XPATH, "//*[self::a or self::button][normalize-space()='About']")
+        )
+    ).click()
+    WebDriverWait(driver, 15).until(
+        EC.presence_of_element_located((By.XPATH, "//*[normalize-space()='Joined']"))
+    )
+    lines = [
+        line.strip()
+        for line in driver.find_element(By.TAG_NAME, "body").text.splitlines()
+        if line.strip()
+    ]
+    return {
+        "joined_at": metric_value(lines, "Joined"),
+        "location": metric_value(lines, "Location"),
+        "category": metric_value(lines, "Category"),
+        "videos_total": convert_compact_number(metric_value(lines, "Videos")),
+        "subscribers_total": convert_compact_number(metric_value(lines, "Subscribers")),
+    }
+
+
 def create_driver():
     options = Options()
     options.set_preference("media.volume_scale", "0.0")
@@ -202,6 +267,38 @@ def collect_vidiq_stats():
                     raw_rendered_text=lines,
                 )
                 print_normalized_profile(normalized_profile)
+                format_metrics = long_form_vs_shorts_metrics(lines)
+                country_ranking, worldwide_ranking = vidiq_rankings(lines)
+                try:
+                    about_details = vidiq_about_details(driver)
+                except TimeoutException:
+                    about_details = {}
+                    record_collection_error(
+                        "vidiq",
+                        "profile_details_unavailable",
+                        "vidIQ did not render the About profile details.",
+                        channel_id,
+                        source_url,
+                    )
+                insert_vidiq_channel_profile(
+                    {
+                        "channel_id": normalized_profile["channel_id"],
+                        "channel_name": normalized_profile["channel_name"],
+                        "joined_at": about_details.get("joined_at"),
+                        "location": about_details.get("location"),
+                        "category": about_details.get("category"),
+                        "videos_total": about_details.get("videos_total"),
+                        "subscribers_total": (
+                            about_details.get("subscribers_total")
+                            or normalized_profile["subscribers_total"]
+                        ),
+                        "views_total": normalized_profile["views_total"],
+                        "estimated_monthly_earnings": normalized_profile["earnings_low"],
+                        **format_metrics,
+                        "ranking_30_day_country": country_ranking,
+                        "ranking_30_day_worldwide": worldwide_ranking,
+                    }
+                )
                 insert_vidiq_channel_stats(
                     {
                         "channel_name": normalized_profile["channel_name"],

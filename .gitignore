@@ -2,3 +2,5 @@
 /.drivers
 /.drivers/*
 /.profile-manager.lock
+/.socialblade-firefox-profile
+/.socialblade-firefox-profile.lock

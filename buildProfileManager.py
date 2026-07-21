@@ -18,6 +18,8 @@ WORKERS = {
 DEFAULT_BATCH_SIZE = 100
 DEFAULT_EMPTY_QUEUE_SECONDS = 60
 DEFAULT_ERROR_BACKOFF_SECONDS = 60 * 60
+DEFAULT_SOCIALBLADE_CLOUDFLARE_BACKOFF_SECONDS = 6 * 60 * 60
+CLOUDFLARE_BLOCK_EXIT_CODE = 3
 
 
 def worker_loop(source, script_name, runner=subprocess.run, sleeper=time.sleep):
@@ -30,6 +32,16 @@ def worker_loop(source, script_name, runner=subprocess.run, sleeper=time.sleep):
             "SKIMMER_SOURCE_ERROR_BACKOFF_SECONDS", DEFAULT_ERROR_BACKOFF_SECONDS
         )
     )
+    cloudflare_backoff_seconds = int(
+        os.environ.get(
+            "SOCIALBLADE_CLOUDFLARE_BACKOFF_SECONDS",
+            DEFAULT_SOCIALBLADE_CLOUDFLARE_BACKOFF_SECONDS,
+        )
+    )
+    if cloudflare_backoff_seconds < 1:
+        raise ValueError(
+            "SOCIALBLADE_CLOUDFLARE_BACKOFF_SECONDS must be at least one second."
+        )
     worker_id = f"{source}-{os.getpid()}"
     environment = os.environ.copy()
     environment["SKIMMER_BATCH_SIZE"] = str(batch_size)
@@ -47,6 +59,13 @@ def worker_loop(source, script_name, runner=subprocess.run, sleeper=time.sleep):
         if result.returncode == 2:
             print(f"{source} worker has no queued profiles; sleeping {empty_queue_seconds}s.")
             sleeper(empty_queue_seconds)
+            continue
+        if source == "socialblade" and result.returncode == CLOUDFLARE_BLOCK_EXIT_CODE:
+            print(
+                "Social Blade is in a Cloudflare cooldown; "
+                f"sleeping {cloudflare_backoff_seconds}s before retrying."
+            )
+            sleeper(cloudflare_backoff_seconds)
             continue
         print(
             f"{source} worker failed; sleeping {error_backoff_seconds}s before retrying."

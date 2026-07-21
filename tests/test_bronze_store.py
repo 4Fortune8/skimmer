@@ -11,6 +11,7 @@ from bronze_store import (
     claim_channel_id_resolution_batch,
     initialize_database,
     insert_socialblade_channel_stats,
+    insert_vidiq_channel_profile,
     insert_vidiq_channel_stats,
     insert_youtube_skimmed,
     mark_profile_failed,
@@ -31,6 +32,13 @@ SOCIALBLADE_MODULE_SPEC = importlib.util.spec_from_file_location(
 )
 socialblade_collector = importlib.util.module_from_spec(SOCIALBLADE_MODULE_SPEC)
 SOCIALBLADE_MODULE_SPEC.loader.exec_module(socialblade_collector)
+
+VIDIQ_MODULE_SPEC = importlib.util.spec_from_file_location(
+    "vidiq_collector",
+    Path(__file__).parents[1] / "buildIDProfile.py",
+)
+vidiq_collector = importlib.util.module_from_spec(VIDIQ_MODULE_SPEC)
+VIDIQ_MODULE_SPEC.loader.exec_module(vidiq_collector)
 
 
 class BronzeStoreTests(unittest.TestCase):
@@ -95,6 +103,80 @@ class BronzeStoreTests(unittest.TestCase):
         self.assertNotIn("raw_record_json", vidiq_columns)
         self.assertNotIn("metric_date", daily_columns)
         self.assertNotIn("raw_record_json", daily_columns)
+
+    def test_profile_detail_records_are_deduplicated(self):
+        vidiq_profile = {
+            "channel_id": "@channel",
+            "channel_name": "A channel",
+            "joined_at": "Oct 10, 2013",
+            "location": "United Kingdom",
+            "category": "Gaming",
+            "videos_total": 785,
+            "subscribers_total": 4_470_000,
+            "views_total": 1_110_000_000,
+            "estimated_monthly_earnings": 38_000,
+            "content_period": "Since Jan 01, 2026",
+            "long_form_uploads": 29,
+            "shorts_uploads": 6,
+            "long_form_views": 35_340_000,
+            "shorts_views": 3_310_000,
+            "ranking_30_day_country": "GB#253",
+            "ranking_30_day_worldwide": "Worldwide#10,448",
+        }
+        self.assertEqual(insert_vidiq_channel_profile(vidiq_profile, self.database_path), 1)
+        self.assertEqual(insert_vidiq_channel_profile(vidiq_profile, self.database_path), 0)
+
+        with sqlite3.connect(self.database_path) as connection:
+            vidiq_row = connection.execute(
+                """
+                SELECT joined_at, long_form_uploads, shorts_views,
+                       ranking_30_day_country, ranking_30_day_worldwide
+                FROM bronze_vidiq_channel_profiles
+                """
+            ).fetchone()
+        self.assertEqual(
+            vidiq_row,
+            ("Oct 10, 2013", 29, 3_310_000, "GB#253", "Worldwide#10,448"),
+        )
+
+    def test_vidiq_content_mix_and_rankings_are_parsed(self):
+        lines = [
+            "Long-form vs Shorts",
+            "Since Jan 01, 2026",
+            "Uploads",
+            "Long-form",
+            "29",
+            "Shorts",
+            "6",
+            "83%17%",
+            "Views",
+            "Long-form",
+            "35.34M",
+            "Shorts",
+            "3.31M",
+            "Subscribers",
+            "4.47M",
+            "Total Video Views",
+            "1.11B",
+            "Ranking (30 days)",
+            "GB#253",
+            "Worldwide#10,448",
+        ]
+
+        self.assertEqual(
+            vidiq_collector.long_form_vs_shorts_metrics(lines),
+            {
+                "content_period": "Since Jan 01, 2026",
+                "long_form_uploads": 29,
+                "shorts_uploads": 6,
+                "long_form_views": 35_340_000,
+                "shorts_views": 3_310_000,
+            },
+        )
+        self.assertEqual(
+            vidiq_collector.vidiq_rankings(lines),
+            ("GB#253", "Worldwide#10,448"),
+        )
 
     def test_queue_refreshes_and_fails_over_once(self):
         insert_youtube_skimmed(

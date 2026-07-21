@@ -125,6 +125,27 @@ def _create_tables(connection):
             data_digest TEXT NOT NULL UNIQUE
         );
 
+        CREATE TABLE IF NOT EXISTS bronze_vidiq_channel_profiles (
+            id INTEGER PRIMARY KEY,
+            channel_id TEXT NOT NULL,
+            channel_name TEXT,
+            joined_at TEXT,
+            location TEXT,
+            category TEXT,
+            videos_total,
+            subscribers_total,
+            views_total,
+            estimated_monthly_earnings,
+            content_period TEXT,
+            long_form_uploads,
+            shorts_uploads,
+            long_form_views,
+            shorts_views,
+            ranking_30_day_country TEXT,
+            ranking_30_day_worldwide TEXT,
+            data_digest TEXT NOT NULL UNIQUE
+        );
+
         CREATE TABLE IF NOT EXISTS bronze_socialblade_channel_stats (
             id INTEGER PRIMARY KEY,
             channel_id TEXT NOT NULL,
@@ -750,6 +771,21 @@ def insert_vidiq_channel_stats(record, database_path=None):
             "channel_id", "channel_name", "subscribers", "subscribers_change", "views",
             "views_change", "earnings_low", "earnings_high", "engagement",
             "upload_frequency", "average_length",
+        ),
+        database_path,
+    )
+
+
+def insert_vidiq_channel_profile(record, database_path=None):
+    return _insert_metric(
+        "bronze_vidiq_channel_profiles",
+        record,
+        (
+            "channel_id", "channel_name", "joined_at", "location", "category",
+            "videos_total", "subscribers_total", "views_total",
+            "estimated_monthly_earnings", "content_period", "long_form_uploads",
+            "shorts_uploads", "long_form_views", "shorts_views",
+            "ranking_30_day_country", "ranking_30_day_worldwide",
         ),
         database_path,
     )

@@ -133,8 +133,12 @@ If a collector has no work, run `python buildProfileManager.py` and inspect
 again after seven days or a newly seen video.
 
 If Social Blade reports a Cloudflare block, the collector exits without marking
-the queued channel as failed. The block is external to the collector; wait for
-access to be restored before retrying rather than failing over every channel.
+the queued channel as failed. The manager releases the queue and pauses
+Social Blade for six hours before retrying; configure that cooldown with
+`SOCIALBLADE_CLOUDFLARE_BACKOFF_SECONDS`. The collector uses a dedicated,
+persistent headed Firefox profile set by `SOCIALBLADE_FIREFOX_PROFILE_DIR`;
+keep that directory private to the service user and do not run concurrent
+Social Blade collectors against it.
 
 Profile workers wait 60 seconds when their source has no queued profiles. A
 source-level failure waits one hour before retrying; set
