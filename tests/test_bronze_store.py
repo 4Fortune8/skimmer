@@ -5,21 +5,30 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from skimmer.storage.bronze import (
+    claim_youtube_api_batch,
     get_profile_queue,
+    get_youtube_api_quota_usage,
     claim_profile_batch,
     claim_channel_id_resolution_batch,
     initialize_database,
     insert_socialblade_channel_stats,
+    insert_youtubeapi_channel_stats,
+    insert_youtubeapi_video_stats,
     insert_vidiq_channel_profile,
     insert_vidiq_channel_stats,
     insert_youtube_skimmed,
     mark_profile_failed,
     mark_profile_succeeded,
+    mark_youtube_api_failed,
+    mark_youtube_api_succeeded,
     profile_identifier_candidates,
     record_collection_attempt,
     record_collection_error,
+    record_youtube_api_quota_usage,
     release_channel_id_resolution_batch,
     release_profile_batch,
+    release_youtube_api_batch,
+    reserve_youtube_api_quota_unit,
     refresh_profile_queue,
     store_youtube_channel_id,
 )
@@ -179,6 +188,7 @@ class BronzeStoreTests(unittest.TestCase):
             self.database_path,
         )
         refresh_profile_queue(self.database_path)
+        mark_youtube_api_failed("@channel", self.database_path)
         initial_source = (
             "vidiq"
             if get_profile_queue("vidiq", database_path=self.database_path)
@@ -196,7 +206,7 @@ class BronzeStoreTests(unittest.TestCase):
             get_profile_queue("socialblade", database_path=self.database_path), []
         )
 
-    def test_success_is_requeued_after_seven_days_or_recent_video(self):
+    def test_scraper_success_is_requeued_after_fourteen_days(self):
         insert_youtube_skimmed(
             [{
                 "video_name": "Old video",
@@ -209,6 +219,7 @@ class BronzeStoreTests(unittest.TestCase):
             self.database_path,
         )
         refresh_profile_queue(self.database_path)
+        mark_youtube_api_failed("@channel", self.database_path)
         source = (
         "vidiq"
         if get_profile_queue("vidiq", database_path=self.database_path)
@@ -217,7 +228,7 @@ class BronzeStoreTests(unittest.TestCase):
         mark_profile_succeeded("@channel", source, self.database_path)
         self.assertEqual(get_profile_queue(source, database_path=self.database_path), [])
 
-        stale = (datetime.now(timezone.utc) - timedelta(days=8)).replace(
+        stale = (datetime.now(timezone.utc) - timedelta(days=15)).replace(
             microsecond=0
         ).isoformat()
         with sqlite3.connect(self.database_path) as connection:
@@ -309,6 +320,58 @@ class BronzeStoreTests(unittest.TestCase):
         self.assertNotIn("bronze_socialblade_daily_channel_metrics", table_names)
         self.assertEqual(row_count, 1)
 
+    def test_profile_queue_migrates_youtube_api_columns(self):
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE profile_queue (
+                    channel_key TEXT PRIMARY KEY,
+                    channel_id TEXT NOT NULL,
+                    channel_name TEXT,
+                    latest_video_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    last_success_at TEXT,
+                    digested INTEGER NOT NULL DEFAULT 0,
+                    assigned_source TEXT NOT NULL,
+                    vidiq_failed INTEGER NOT NULL DEFAULT 0,
+                    socialblade_failed INTEGER NOT NULL DEFAULT 0,
+                    needs_review INTEGER NOT NULL DEFAULT 0,
+                    claimed_by TEXT,
+                    claimed_at TEXT,
+                    youtube_channel_id TEXT,
+                    channel_id_claimed_by TEXT,
+                    channel_id_claimed_at TEXT,
+                    youtube_channel_id_attempted_at TEXT
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO profile_queue (
+                    channel_key, channel_id, latest_video_at, last_seen_at, assigned_source
+                ) VALUES ('@channel', '@channel', '2026-07-22T00:00:00+00:00',
+                          '2026-07-22T00:00:00+00:00', 'vidiq')
+                """
+            )
+
+        initialize_database(self.database_path)
+
+        with sqlite3.connect(self.database_path) as connection:
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(profile_queue)")
+            }
+            row = connection.execute(
+                """
+                SELECT youtube_api_failed, youtube_api_attempted_at, youtube_api_success_at
+                FROM profile_queue
+                WHERE channel_key = '@channel'
+                """
+            ).fetchone()
+        self.assertIn("youtube_api_failed", columns)
+        self.assertIn("youtube_api_attempted_at", columns)
+        self.assertIn("youtube_api_success_at", columns)
+        self.assertEqual(row, (0, None, None))
+
     def test_socialblade_detects_cloudflare_block(self):
         class FakeElement:
             text = "Attention Required! Cloudflare"
@@ -336,6 +399,8 @@ class BronzeStoreTests(unittest.TestCase):
                 self.database_path,
             )
         refresh_profile_queue(self.database_path)
+        for index in range(3):
+            mark_youtube_api_failed(f"@channel{index}", self.database_path)
         source = (
             "vidiq"
             if get_profile_queue("vidiq", database_path=self.database_path)
@@ -351,6 +416,136 @@ class BronzeStoreTests(unittest.TestCase):
             claim_profile_batch(source, "worker-two", 100, self.database_path),
             claimed,
         )
+
+    def test_youtube_api_snapshots_are_deduplicated_by_day(self):
+        channel_record = {
+            "collected_at": "2026-07-22T10:00:00+00:00",
+            "channel_id": "UC" + "a" * 22,
+            "channel_name": "Channel",
+            "subscribers": 1000,
+            "subscribers_change": None,
+            "views": 2000,
+            "views_change": None,
+            "video_count": 10,
+            "country": "US",
+            "channel_published_at": "2020-01-01T00:00:00+00:00",
+            "uploads_playlist_id": "UU" + "b" * 22,
+        }
+        self.assertEqual(insert_youtubeapi_channel_stats(channel_record, self.database_path), 1)
+        self.assertEqual(insert_youtubeapi_channel_stats(channel_record, self.database_path), 0)
+
+        video_record = {
+            "collected_at": "2026-07-22T10:00:00+00:00",
+            "video_id": "vid-1",
+            "channel_id": channel_record["channel_id"],
+            "title": "Video",
+            "published_at": "2026-07-21T00:00:00+00:00",
+            "duration_seconds": 123,
+            "category_id": "20",
+            "views": 100,
+            "likes": 10,
+            "comments": 5,
+        }
+        self.assertEqual(
+            insert_youtubeapi_video_stats([video_record], self.database_path),
+            1,
+        )
+        self.assertEqual(
+            insert_youtubeapi_video_stats([video_record], self.database_path),
+            0,
+        )
+
+    def test_youtube_api_queue_excludes_successful_channels_from_scrapers(self):
+        insert_youtube_skimmed(
+            [{
+                "video_name": "Video",
+                "channel_display_name": "Channel",
+                "views": "1K views",
+                "age": "1 hour ago",
+                "channel_id": "@channel",
+                "youtube_channel_id": "UC" + "a" * 22,
+            }],
+            "youtube.com",
+            self.database_path,
+        )
+        refresh_profile_queue(self.database_path)
+        claim = claim_youtube_api_batch("api-worker", 10, self.database_path)
+        self.assertTrue(claim)
+        mark_youtube_api_succeeded("@channel", self.database_path)
+        self.assertEqual(
+            claim_profile_batch("vidiq", "vidiq-worker", 10, self.database_path),
+            [],
+        )
+        self.assertEqual(
+            claim_profile_batch("socialblade", "socialblade-worker", 10, self.database_path),
+            [],
+        )
+        release_youtube_api_batch("api-worker", self.database_path)
+
+    def test_youtube_api_claims_channels_held_for_scraper_review(self):
+        insert_youtube_skimmed(
+            [{
+                "video_name": "Video",
+                "channel_display_name": "Channel",
+                "views": "1K views",
+                "age": "1 hour ago",
+                "channel_id": "@channel",
+            }],
+            "youtube.com",
+            self.database_path,
+        )
+        refresh_profile_queue(self.database_path)
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute(
+                "UPDATE profile_queue SET needs_review = 1 WHERE channel_key = '@channel'"
+            )
+
+        claimed = claim_youtube_api_batch("api-worker", 10, self.database_path)
+        self.assertEqual(claimed, [("@channel", "@channel", None)])
+        mark_youtube_api_succeeded("@channel", self.database_path)
+        with sqlite3.connect(self.database_path) as connection:
+            needs_review = connection.execute(
+                "SELECT needs_review FROM profile_queue WHERE channel_key = '@channel'"
+            ).fetchone()[0]
+        self.assertEqual(needs_review, 0)
+
+    def test_youtube_api_failure_and_quota_tracking(self):
+        insert_youtube_skimmed(
+            [{
+                "video_name": "Video",
+                "channel_display_name": "Channel",
+                "views": "1K views",
+                "age": "1 hour ago",
+                "channel_id": "@channel",
+            }],
+            "youtube.com",
+            self.database_path,
+        )
+        refresh_profile_queue(self.database_path)
+        mark_youtube_api_failed("@channel", self.database_path)
+        with sqlite3.connect(self.database_path) as connection:
+            failed = connection.execute(
+                "SELECT youtube_api_failed FROM profile_queue WHERE channel_key = '@channel'"
+            ).fetchone()[0]
+        self.assertEqual(failed, 1)
+
+        self.assertEqual(get_youtube_api_quota_usage(database_path=self.database_path), 0)
+        record_youtube_api_quota_usage(3, database_path=self.database_path)
+        self.assertEqual(get_youtube_api_quota_usage(database_path=self.database_path), 3)
+        record_youtube_api_quota_usage(2, database_path=self.database_path)
+        self.assertEqual(get_youtube_api_quota_usage(database_path=self.database_path), 5)
+
+    def test_youtube_api_quota_reservation_never_exceeds_budget(self):
+        self.assertTrue(
+            reserve_youtube_api_quota_unit(2, database_path=self.database_path)
+        )
+        self.assertTrue(
+            reserve_youtube_api_quota_unit(2, database_path=self.database_path)
+        )
+        self.assertFalse(
+            reserve_youtube_api_quota_unit(2, database_path=self.database_path)
+        )
+        self.assertEqual(get_youtube_api_quota_usage(database_path=self.database_path), 2)
 
     def test_socialblade_waits_for_and_uses_canonical_channel_id(self):
         record = {
@@ -382,6 +577,7 @@ class BronzeStoreTests(unittest.TestCase):
         canonical_id = f"UC{'a' * 22}"
         store_youtube_channel_id("@channel", canonical_id, self.database_path)
         release_channel_id_resolution_batch("resolver-worker", self.database_path)
+        mark_youtube_api_failed("@channel", self.database_path)
         self.assertEqual(
             claim_profile_batch("socialblade", "socialblade-worker", 100, self.database_path),
             [canonical_id],

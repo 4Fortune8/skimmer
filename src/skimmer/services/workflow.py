@@ -1,4 +1,4 @@
-"""Run hourly YouTube collection alongside persistent profile workers."""
+"""Run frequent YouTube feed discovery and daily API snapshots."""
 
 import os
 import subprocess
@@ -10,18 +10,36 @@ from pathlib import Path
 from skimmer.config import PROJECT_ROOT
 
 YOUTUBE_MODULE = "skimmer.collectors.youtube"
+YOUTUBE_API_MODULE = "skimmer.collectors.youtube_api"
 PROFILE_MANAGER_MODULE = "skimmer.services.profile_manager"
-DEFAULT_CYCLE_SECONDS = 60 * 60
+DEFAULT_FEED_CYCLE_SECONDS = 15 * 60
+DEFAULT_YOUTUBE_API_CYCLE_SECONDS = 24 * 60 * 60
 
 
 def cycle_seconds():
-    value = os.environ.get("SKIMMER_CYCLE_SECONDS", str(DEFAULT_CYCLE_SECONDS))
+    value = os.environ.get(
+        "SKIMMER_FEED_CYCLE_SECONDS",
+        os.environ.get("SKIMMER_CYCLE_SECONDS", str(DEFAULT_FEED_CYCLE_SECONDS)),
+    )
     try:
         seconds = int(value)
     except ValueError as exc:
-        raise ValueError("SKIMMER_CYCLE_SECONDS must be an integer.") from exc
+        raise ValueError("SKIMMER_FEED_CYCLE_SECONDS must be an integer.") from exc
     if seconds < 1:
-        raise ValueError("SKIMMER_CYCLE_SECONDS must be at least one second.")
+        raise ValueError("SKIMMER_FEED_CYCLE_SECONDS must be at least one second.")
+    return seconds
+
+
+def youtube_api_cycle_seconds():
+    value = os.environ.get(
+        "YOUTUBE_API_CYCLE_SECONDS", str(DEFAULT_YOUTUBE_API_CYCLE_SECONDS)
+    )
+    try:
+        seconds = int(value)
+    except ValueError as exc:
+        raise ValueError("YOUTUBE_API_CYCLE_SECONDS must be an integer.") from exc
+    if seconds < 1:
+        raise ValueError("YOUTUBE_API_CYCLE_SECONDS must be at least one second.")
     return seconds
 
 
@@ -52,16 +70,28 @@ def start_profile_manager(popen=subprocess.Popen):
     )
 
 
-def main(sleeper=time.sleep, popen=subprocess.Popen, runner=subprocess.run):
-    interval = cycle_seconds()
-    profile_manager = start_profile_manager(popen)
+def main(
+    sleeper=time.sleep,
+    popen=subprocess.Popen,
+    runner=subprocess.run,
+    monotonic=time.monotonic,
+):
+    feed_interval = cycle_seconds()
+    api_interval = youtube_api_cycle_seconds()
+    profile_manager = None
+    next_api_run = None
     while True:
-        if profile_manager.poll() is not None:
-            print("Profile manager exited; restarting it.")
-            profile_manager = start_profile_manager(popen)
         run_module(YOUTUBE_MODULE, runner)
-        print(f"Sleeping for {interval} seconds before the next YouTube collection.")
-        sleeper(interval)
+        if next_api_run is None or monotonic() >= next_api_run:
+            run_module(YOUTUBE_API_MODULE, runner)
+            next_api_run = monotonic() + api_interval
+        if profile_manager is None or profile_manager.poll() is not None:
+            print(f"[{datetime.now(timezone.utc).isoformat()}] Starting fallback profile workers.")
+            profile_manager = start_profile_manager(popen)
+        print(
+            f"Sleeping for {feed_interval} seconds before the next YouTube feed collection."
+        )
+        sleeper(feed_interval)
 
 
 if __name__ == "__main__":

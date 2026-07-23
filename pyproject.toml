@@ -22,6 +22,7 @@ analysis = [
 
 [project.scripts]
 skimmer-youtube = "skimmer.collectors.youtube:main"
+skimmer-youtube-api = "skimmer.collectors.youtube_api:main"
 skimmer-vidiq = "skimmer.collectors.vidiq:main"
 skimmer-socialblade = "skimmer.collectors.socialblade:main"
 skimmer-resolve-channel-ids = "skimmer.collectors.channel_ids:main"

@@ -17,6 +17,9 @@ Environment=SOCIALBLADE_CLOUDFLARE_BACKOFF_SECONDS=21600
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/home/orangepi/code_projects/skimmer/src
 Environment=SKIMMER_YOUTUBE_CPU=0
+Environment=SKIMMER_FEED_CYCLE_SECONDS=900
+Environment=YOUTUBE_HOME_PASSES=6
+Environment=YOUTUBE_API_CYCLE_SECONDS=86400
 ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1920x1080x24" /usr/bin/python3 -m skimmer.services.workflow
 Restart=always
 RestartSec=30

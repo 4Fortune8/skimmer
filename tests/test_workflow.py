@@ -6,7 +6,7 @@ from skimmer.services import workflow
 
 
 class WorkflowTests(unittest.TestCase):
-    def test_main_starts_manager_and_runs_youtube_independently(self):
+    def test_main_runs_feed_and_api_before_starting_fallback_manager(self):
         calls = []
 
         def runner(command, **kwargs):
@@ -31,7 +31,12 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "stop test loop"):
             workflow.main(sleeper, popen, runner)
         self.assertEqual(
-            calls, ["skimmer.services.profile_manager", "skimmer.collectors.youtube"]
+            calls,
+            [
+                "skimmer.collectors.youtube",
+                "skimmer.collectors.youtube_api",
+                "skimmer.services.profile_manager",
+            ],
         )
 
     def test_youtube_uses_configured_cpu(self):
@@ -59,9 +64,13 @@ class WorkflowTests(unittest.TestCase):
             ]],
         )
 
-    def test_cycle_seconds_defaults_to_one_hour(self):
+    def test_feed_cycle_seconds_defaults_to_fifteen_minutes(self):
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(workflow.cycle_seconds(), 3600)
+            self.assertEqual(workflow.cycle_seconds(), 900)
+
+    def test_youtube_api_cycle_seconds_defaults_to_daily(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(workflow.youtube_api_cycle_seconds(), 86400)
 
 
 if __name__ == "__main__":

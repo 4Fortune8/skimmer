@@ -7,6 +7,7 @@ import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from skimmer.config import PROJECT_ROOT
 
@@ -105,7 +106,10 @@ def _create_tables(connection):
             youtube_channel_id TEXT,
             channel_id_claimed_by TEXT,
             channel_id_claimed_at TEXT,
-            youtube_channel_id_attempted_at TEXT
+            youtube_channel_id_attempted_at TEXT,
+            youtube_api_failed INTEGER NOT NULL DEFAULT 0 CHECK(youtube_api_failed IN (0, 1)),
+            youtube_api_attempted_at TEXT,
+            youtube_api_success_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_profile_queue_work
             ON profile_queue(digested, needs_review, assigned_source, claimed_at);
@@ -187,6 +191,48 @@ def _create_tables(connection):
         );
         CREATE INDEX IF NOT EXISTS idx_collection_attempts_channel
             ON collection_attempts(channel_key, source, occurred_at);
+
+        CREATE TABLE IF NOT EXISTS youtube_api_quota_usage (
+            quota_date TEXT PRIMARY KEY,
+            units_used INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS bronze_youtubeapi_channel_stats (
+            id INTEGER PRIMARY KEY,
+            collected_at TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            channel_name TEXT,
+            subscribers,
+            subscribers_change,
+            views,
+            views_change,
+            video_count,
+            country TEXT,
+            channel_published_at TEXT,
+            uploads_playlist_id TEXT,
+            data_digest TEXT NOT NULL UNIQUE
+        );
+        CREATE INDEX IF NOT EXISTS idx_bronze_youtubeapi_channel_stats_channel_time
+            ON bronze_youtubeapi_channel_stats(channel_id, collected_at);
+
+        CREATE TABLE IF NOT EXISTS bronze_youtubeapi_video_stats (
+            id INTEGER PRIMARY KEY,
+            collected_at TEXT NOT NULL,
+            video_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            title TEXT,
+            published_at TEXT,
+            duration_seconds,
+            category_id TEXT,
+            views,
+            likes,
+            comments,
+            data_digest TEXT NOT NULL UNIQUE
+        );
+        CREATE INDEX IF NOT EXISTS idx_bronze_youtubeapi_video_stats_video_time
+            ON bronze_youtubeapi_video_stats(video_id, collected_at);
+        CREATE INDEX IF NOT EXISTS idx_bronze_youtubeapi_video_stats_channel
+            ON bronze_youtubeapi_video_stats(channel_id);
         """
     )
 
@@ -265,6 +311,18 @@ def _ensure_profile_queue_columns(connection):
         connection.execute(
             "ALTER TABLE profile_queue "
             "ADD COLUMN youtube_channel_id_attempted_at TEXT"
+        )
+    if "youtube_api_failed" not in columns:
+        connection.execute(
+            "ALTER TABLE profile_queue ADD COLUMN youtube_api_failed INTEGER NOT NULL DEFAULT 0"
+        )
+    if "youtube_api_attempted_at" not in columns:
+        connection.execute(
+            "ALTER TABLE profile_queue ADD COLUMN youtube_api_attempted_at TEXT"
+        )
+    if "youtube_api_success_at" not in columns:
+        connection.execute(
+            "ALTER TABLE profile_queue ADD COLUMN youtube_api_success_at TEXT"
         )
 
 
@@ -400,9 +458,7 @@ def refresh_profile_queue(database_path=None):
                 )
                 eligible = (
                     last_success is None
-                    or last_success < now - timedelta(days=7)
-                    or datetime.fromisoformat(latest_video_at)
-                    >= now - timedelta(days=14)
+                    or last_success < now - timedelta(days=14)
                 )
             if existing:
                 connection.execute(
@@ -452,6 +508,8 @@ def get_profile_queue(source, limit=0, database_path=None):
         SELECT channel_id FROM profile_queue
         WHERE digested = 0 AND needs_review = 0 AND assigned_source = ?
           AND claimed_by IS NULL
+          AND youtube_api_attempted_at IS NOT NULL
+          AND youtube_api_success_at IS NULL
         ORDER BY latest_video_at DESC, channel_key
     """
     params = [source]
@@ -486,6 +544,8 @@ def claim_profile_batch(source, worker_id, limit=100, database_path=None):
               AND assigned_source = ?
               AND (? != 'socialblade' OR youtube_channel_id IS NOT NULL)
               AND (claimed_at IS NULL OR claimed_at < ?)
+              AND youtube_api_attempted_at IS NOT NULL
+              AND youtube_api_success_at IS NULL
             ORDER BY latest_video_at DESC, channel_key
             LIMIT ?
             """,
@@ -749,6 +809,154 @@ def record_collection_error(
         )
 
 
+def _quota_date_key(occurred_at=None):
+    moment = (occurred_at or _now()).astimezone(ZoneInfo("America/Los_Angeles"))
+    return moment.date().isoformat()
+
+
+def record_youtube_api_quota_usage(units, occurred_at=None, database_path=None):
+    if units < 0:
+        raise ValueError("units must be non-negative.")
+    initialize_database(database_path)
+    quota_date = _quota_date_key(occurred_at)
+    with _connection(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO youtube_api_quota_usage (quota_date, units_used)
+            VALUES (?, ?)
+            ON CONFLICT(quota_date) DO UPDATE SET
+                units_used = units_used + excluded.units_used
+            """,
+            (quota_date, units),
+        )
+
+
+def get_youtube_api_quota_usage(occurred_at=None, database_path=None):
+    initialize_database(database_path)
+    quota_date = _quota_date_key(occurred_at)
+    with _connection(database_path) as connection:
+        row = connection.execute(
+            "SELECT units_used FROM youtube_api_quota_usage WHERE quota_date = ?",
+            (quota_date,),
+        ).fetchone()
+    return row[0] if row else 0
+
+
+def reserve_youtube_api_quota_unit(budget, occurred_at=None, database_path=None):
+    """Atomically reserve one quota unit without exceeding the local budget."""
+    if budget < 1:
+        raise ValueError("budget must be at least one.")
+    initialize_database(database_path)
+    quota_date = _quota_date_key(occurred_at)
+    with _connection(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """
+            INSERT INTO youtube_api_quota_usage (quota_date, units_used)
+            VALUES (?, 0)
+            ON CONFLICT(quota_date) DO NOTHING
+            """,
+            (quota_date,),
+        )
+        result = connection.execute(
+            """
+            UPDATE youtube_api_quota_usage
+            SET units_used = units_used + 1
+            WHERE quota_date = ? AND units_used < ?
+            """,
+            (quota_date, budget),
+        )
+        return result.rowcount == 1
+
+
+def claim_youtube_api_batch(worker_id, limit=100, database_path=None):
+    if not worker_id:
+        raise ValueError("worker_id is required.")
+    if limit < 1:
+        raise ValueError("limit must be at least one.")
+    initialize_database(database_path)
+    now = _now()
+    claimed_at = _timestamp(now)
+    expired_at = _timestamp(now - timedelta(hours=2))
+    retry_at = _timestamp(now - timedelta(hours=1))
+    with _connection(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        rows = connection.execute(
+            """
+            SELECT channel_key, channel_id, youtube_channel_id
+            FROM profile_queue
+            WHERE (claimed_by IS NULL OR claimed_at < ?)
+              AND (
+                  youtube_api_success_at IS NULL
+                  OR youtube_api_attempted_at IS NULL
+                  OR youtube_api_attempted_at < ?
+              )
+            ORDER BY
+                CASE WHEN youtube_api_success_at IS NULL THEN 0 ELSE 1 END,
+                COALESCE(youtube_api_success_at, youtube_api_attempted_at, last_seen_at) ASC,
+                latest_video_at DESC,
+                channel_key
+            LIMIT ?
+            """,
+            (expired_at, retry_at, limit),
+        ).fetchall()
+        if rows:
+            keys = [row[0] for row in rows]
+            placeholders = ", ".join("?" for _ in keys)
+            connection.execute(
+                f"""
+                UPDATE profile_queue
+                SET claimed_by = ?, claimed_at = ?, youtube_api_attempted_at = ?
+                WHERE channel_key IN ({placeholders})
+                """,
+                (worker_id, claimed_at, claimed_at, *keys),
+            )
+        return rows
+
+
+def release_youtube_api_batch(worker_id, database_path=None):
+    with _connection(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE profile_queue
+            SET claimed_by = NULL, claimed_at = NULL
+            WHERE claimed_by = ? AND youtube_api_success_at IS NULL
+            """,
+            (worker_id,),
+        )
+
+
+def mark_youtube_api_succeeded(channel_id, database_path=None):
+    initialize_database(database_path)
+    now = _timestamp()
+    with _connection(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE profile_queue
+            SET youtube_api_failed = 0, youtube_api_success_at = ?,
+                last_success_at = ?, digested = 1, needs_review = 0,
+                claimed_by = NULL, claimed_at = NULL
+            WHERE channel_key = ? OR youtube_channel_id = ?
+            """,
+            (now, now, _channel_key(channel_id), channel_id),
+        )
+
+
+def mark_youtube_api_failed(channel_id, database_path=None):
+    initialize_database(database_path)
+    now = _timestamp()
+    with _connection(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE profile_queue
+            SET youtube_api_failed = 1, youtube_api_attempted_at = ?,
+                claimed_by = NULL, claimed_at = NULL
+            WHERE channel_key = ? OR youtube_channel_id = ?
+            """,
+            (now, _channel_key(channel_id), channel_id),
+        )
+
+
 def _insert_metric(table, record, columns, database_path=None):
     initialize_database(database_path)
     values = {column: record.get(column) for column in columns}
@@ -775,6 +983,93 @@ def insert_vidiq_channel_stats(record, database_path=None):
         ),
         database_path,
     )
+
+
+def insert_youtubeapi_channel_stats(record, database_path=None):
+    initialize_database(database_path)
+    columns = (
+        "collected_at",
+        "channel_id",
+        "channel_name",
+        "subscribers",
+        "subscribers_change",
+        "views",
+        "views_change",
+        "video_count",
+        "country",
+        "channel_published_at",
+        "uploads_playlist_id",
+    )
+    values = {column: record.get(column) for column in columns}
+    digest_values = dict(values)
+    if digest_values.get("collected_at"):
+        digest_values["collected_at"] = digest_values["collected_at"][:10]
+    digest_values["channel_id"] = record["channel_id"]
+    data_digest = _digest(digest_values)
+    with _connection(database_path) as connection:
+        before = connection.total_changes
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO bronze_youtubeapi_channel_stats (
+                collected_at, channel_id, channel_name, subscribers,
+                subscribers_change, views, views_change, video_count, country,
+                channel_published_at, uploads_playlist_id, data_digest
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            tuple(values[column] for column in columns) + (data_digest,),
+        )
+        return connection.total_changes - before
+
+
+def insert_youtubeapi_video_stats(records, database_path=None):
+    records = list(records)
+    if not records:
+        return 0
+    initialize_database(database_path)
+    rows = []
+    for record in records:
+        values = {
+            "collected_at": record.get("collected_at"),
+            "video_id": record["video_id"],
+            "channel_id": record["channel_id"],
+            "title": record.get("title"),
+            "published_at": record.get("published_at"),
+            "duration_seconds": record.get("duration_seconds"),
+            "category_id": record.get("category_id"),
+            "views": record.get("views"),
+            "likes": record.get("likes"),
+            "comments": record.get("comments"),
+        }
+        digest_values = dict(values)
+        if digest_values.get("collected_at"):
+            digest_values["collected_at"] = digest_values["collected_at"][:10]
+        rows.append(
+            (
+                values["collected_at"],
+                values["video_id"],
+                values["channel_id"],
+                values["title"],
+                values["published_at"],
+                values["duration_seconds"],
+                values["category_id"],
+                values["views"],
+                values["likes"],
+                values["comments"],
+                _digest(digest_values),
+            )
+        )
+    with _connection(database_path) as connection:
+        before = connection.total_changes
+        connection.executemany(
+            """
+            INSERT OR IGNORE INTO bronze_youtubeapi_video_stats (
+                collected_at, video_id, channel_id, title, published_at,
+                duration_seconds, category_id, views, likes, comments, data_digest
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        return connection.total_changes - before
 
 
 def insert_vidiq_channel_profile(record, database_path=None):

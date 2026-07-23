@@ -10,6 +10,7 @@ from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.firefox.service import Service
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
 import time
 
@@ -282,15 +283,25 @@ def collect_youtube_feed():
         scroll_steps = parse_int_env("YOUTUBE_HOME_SCROLL_STEPS", default=10)
         records = []
         for pass_index in range(home_passes):
+            print("pass_index")
+            print(pass_index)
             scroll_home_feed(driver, steps=scroll_steps, delay=1)
             records.extend(extract_home_records(driver))
             if pass_index < home_passes - 1:
-                driver.refresh()
-                WebDriverWait(driver, 30).until(
-                    EC.presence_of_element_located(
-                        (By.CSS_SELECTOR, "ytd-rich-item-renderer")
+                try:
+                    driver.refresh()
+                    WebDriverWait(driver, 30).until(
+                        EC.presence_of_element_located(
+                            (By.CSS_SELECTOR, "ytd-rich-item-renderer")
+                        )
                     )
-                )
+                except (TimeoutException, WebDriverException) as exc:
+                    print(
+                        f"Refresh failed on pass {pass_index + 1}/{home_passes} "
+                        f"({exc.__class__.__name__}); stopping early with "
+                        f"{len(records)} records collected so far."
+                    )
+                    break
 
         inserted = insert_youtube_skimmed(
             records,
