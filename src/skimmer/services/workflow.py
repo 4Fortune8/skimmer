@@ -12,6 +12,7 @@ from skimmer.config import PROJECT_ROOT
 YOUTUBE_MODULE = "skimmer.collectors.youtube"
 YOUTUBE_API_MODULE = "skimmer.collectors.youtube_api"
 PROFILE_MANAGER_MODULE = "skimmer.services.profile_manager"
+PROFILE_FALLBACK_MODULE = "skimmer.services.profile_fallback"
 DEFAULT_FEED_CYCLE_SECONDS = 15 * 60
 DEFAULT_YOUTUBE_API_CYCLE_SECONDS = 24 * 60 * 60
 
@@ -70,6 +71,15 @@ def start_profile_manager(popen=subprocess.Popen):
     )
 
 
+def start_profile_fallback_chain(popen=subprocess.Popen):
+    print(f"[{datetime.now(timezone.utc).isoformat()}] Starting {PROFILE_FALLBACK_MODULE}.")
+    return popen(
+        [sys.executable, "-m", PROFILE_FALLBACK_MODULE],
+        cwd=PROJECT_ROOT,
+        env=os.environ.copy(),
+    )
+
+
 def main(
     sleeper=time.sleep,
     popen=subprocess.Popen,
@@ -79,6 +89,7 @@ def main(
     feed_interval = cycle_seconds()
     api_interval = youtube_api_cycle_seconds()
     profile_manager = None
+    profile_fallback = None
     next_api_run = None
     while True:
         run_module(YOUTUBE_MODULE, runner)
@@ -88,6 +99,13 @@ def main(
         if profile_manager is None or profile_manager.poll() is not None:
             print(f"[{datetime.now(timezone.utc).isoformat()}] Starting fallback profile workers.")
             profile_manager = start_profile_manager(popen)
+        if profile_fallback is None or profile_fallback.poll() is not None:
+            profile_fallback = start_profile_fallback_chain(popen)
+        else:
+            print(
+                "vidiq/socialblade fallback pass is still running; "
+                "skipping this trigger."
+            )
         print(
             f"Sleeping for {feed_interval} seconds before the next YouTube feed collection."
         )

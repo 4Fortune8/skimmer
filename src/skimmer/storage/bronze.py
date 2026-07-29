@@ -233,6 +233,18 @@ def _create_tables(connection):
             ON bronze_youtubeapi_video_stats(video_id, collected_at);
         CREATE INDEX IF NOT EXISTS idx_bronze_youtubeapi_video_stats_channel
             ON bronze_youtubeapi_video_stats(channel_id);
+
+        CREATE TABLE IF NOT EXISTS discovery_seed_history (
+            id INTEGER PRIMARY KEY,
+            selected_at TEXT NOT NULL,
+            selector TEXT NOT NULL,
+            seed_video_id TEXT NOT NULL,
+            seed_channel_id TEXT NOT NULL,
+            score REAL NOT NULL,
+            discovered_channels INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_discovery_seed_history_video_time
+            ON discovery_seed_history(seed_video_id, selected_at);
         """
     )
 
@@ -398,7 +410,7 @@ def insert_youtube_skimmed(records, source_file, database_path=None):
             (
                 _timestamp(observed_at),
                 values["video_published_at"],
-                source_file,
+                record.get("source_file") or source_file,
                 values["video_name"],
                 values["channel_display_name"],
                 values["views"],
@@ -427,6 +439,148 @@ def insert_youtube_skimmed(records, source_file, database_path=None):
         return connection.total_changes - before
 
 
+def new_profile_channel_keys(records, database_path=None):
+    """Return channel keys from records that are not yet in profile_queue."""
+    keys = {
+        _channel_key(record["channel_id"])
+        for record in records
+        if record.get("channel_id") and record["channel_id"].strip()
+    }
+    if not keys:
+        return set()
+    initialize_database(database_path)
+    with _connection(database_path) as connection:
+        existing = {
+            row[0]
+            for row in connection.execute(
+                "SELECT channel_key FROM profile_queue"
+            )
+        }
+    return keys - existing
+
+
+def select_high_views_per_subscriber_seeds(
+    limit=5,
+    minimum_subscribers=100,
+    maximum_subscribers=1_000_000,
+    minimum_video_views=10_000,
+    video_lookback_days=90,
+    seed_cooldown_days=7,
+    database_path=None,
+    now=None,
+):
+    """Select one recent breakout video per low-subscriber channel."""
+    if limit < 1:
+        raise ValueError("limit must be at least one.")
+    if minimum_subscribers < 1:
+        raise ValueError("minimum_subscribers must be at least one.")
+    if maximum_subscribers < minimum_subscribers:
+        raise ValueError(
+            "maximum_subscribers must be greater than or equal to minimum_subscribers."
+        )
+    if minimum_video_views < 1:
+        raise ValueError("minimum_video_views must be at least one.")
+    if video_lookback_days < 1 or seed_cooldown_days < 1:
+        raise ValueError("lookback and cooldown days must be at least one.")
+
+    initialize_database(database_path)
+    selected_at = now or _now()
+    published_after = _timestamp(selected_at - timedelta(days=video_lookback_days))
+    cooldown_after = _timestamp(selected_at - timedelta(days=seed_cooldown_days))
+    with _connection(database_path) as connection:
+        rows = connection.execute(
+            """
+            WITH latest_channels AS (
+                SELECT channel_id, channel_name, subscribers, views,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY channel_id
+                           ORDER BY collected_at DESC, id DESC
+                       ) AS snapshot_rank
+                FROM bronze_youtubeapi_channel_stats
+            ),
+            ranked_videos AS (
+                SELECT c.channel_id, c.channel_name, c.subscribers,
+                       c.views AS channel_views, v.video_id, v.title,
+                       v.published_at, v.views AS video_views,
+                       CAST(v.views AS REAL) / CAST(c.subscribers AS REAL) AS score,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY c.channel_id
+                           ORDER BY CAST(v.views AS INTEGER) DESC,
+                                    v.published_at DESC, v.id DESC
+                       ) AS video_rank
+                FROM latest_channels c
+                JOIN bronze_youtubeapi_video_stats v
+                  ON v.channel_id = c.channel_id
+                WHERE c.snapshot_rank = 1
+                  AND CAST(c.subscribers AS INTEGER) BETWEEN ? AND ?
+                  AND CAST(v.views AS INTEGER) >= ?
+                  AND v.published_at >= ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM discovery_seed_history history
+                      WHERE history.seed_video_id = v.video_id
+                        AND history.selected_at >= ?
+                  )
+            )
+            SELECT channel_id, channel_name, subscribers, channel_views,
+                   video_id, title, published_at, video_views, score
+            FROM ranked_videos
+            WHERE video_rank = 1
+            ORDER BY score DESC, CAST(video_views AS INTEGER) DESC
+            LIMIT ?
+            """,
+            (
+                minimum_subscribers,
+                maximum_subscribers,
+                minimum_video_views,
+                published_after,
+                cooldown_after,
+                limit,
+            ),
+        ).fetchall()
+    columns = (
+        "channel_id",
+        "channel_name",
+        "subscribers",
+        "channel_views",
+        "video_id",
+        "title",
+        "published_at",
+        "video_views",
+        "score",
+    )
+    return [dict(zip(columns, row)) for row in rows]
+
+
+def record_discovery_seed(
+    selector,
+    seed_video_id,
+    seed_channel_id,
+    score,
+    discovered_channels,
+    database_path=None,
+):
+    """Record a seed's use and yield so it can be cooled down and evaluated."""
+    initialize_database(database_path)
+    with _connection(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO discovery_seed_history (
+                selected_at, selector, seed_video_id, seed_channel_id,
+                score, discovered_channels
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _timestamp(),
+                selector,
+                seed_video_id,
+                seed_channel_id,
+                score,
+                discovered_channels,
+            ),
+        )
+
+
 def refresh_profile_queue(database_path=None):
     """Refresh queue eligibility from retained feed records after each feed run."""
     initialize_database(database_path)
@@ -450,7 +604,9 @@ def refresh_profile_queue(database_path=None):
                 "SELECT last_success_at, digested, needs_review FROM profile_queue WHERE channel_key = ?",
                 (key,),
             ).fetchone()
-            initial_source = "vidiq" if int(_digest(key)[0], 16) % 2 else "socialblade"
+            # Always try vidiq first; mark_profile_failed() fails a channel over
+            # to socialblade if vidiq can't collect it.
+            initial_source = "vidiq"
             eligible = existing is None
             if existing and not existing[2]:
                 last_success = (

@@ -21,7 +21,9 @@ from skimmer.storage.bronze import (
     mark_profile_succeeded,
     mark_youtube_api_failed,
     mark_youtube_api_succeeded,
+    new_profile_channel_keys,
     profile_identifier_candidates,
+    record_discovery_seed,
     record_collection_attempt,
     record_collection_error,
     record_youtube_api_quota_usage,
@@ -30,6 +32,7 @@ from skimmer.storage.bronze import (
     release_youtube_api_batch,
     reserve_youtube_api_quota_unit,
     refresh_profile_queue,
+    select_high_views_per_subscriber_seeds,
     store_youtube_channel_id,
 )
 
@@ -454,6 +457,85 @@ class BronzeStoreTests(unittest.TestCase):
             insert_youtubeapi_video_stats([video_record], self.database_path),
             0,
         )
+
+    def test_high_views_per_subscriber_seed_selection_and_cooldown(self):
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        channels = [
+            ("UCsmall", 1_000, 100_000, "small-video", 50_000),
+            ("UCmedium", 10_000, 500_000, "medium-video", 100_000),
+            ("UCmillion", 1_000_001, 5_000_000, "million-video", 9_000_000),
+        ]
+        for channel_id, subscribers, channel_views, video_id, video_views in channels:
+            insert_youtubeapi_channel_stats(
+                {
+                    "collected_at": now.isoformat(),
+                    "channel_id": channel_id,
+                    "channel_name": channel_id,
+                    "subscribers": subscribers,
+                    "views": channel_views,
+                },
+                self.database_path,
+            )
+            insert_youtubeapi_video_stats(
+                [{
+                    "collected_at": now.isoformat(),
+                    "video_id": video_id,
+                    "channel_id": channel_id,
+                    "title": video_id,
+                    "published_at": (now - timedelta(days=1)).isoformat(),
+                    "views": video_views,
+                }],
+                self.database_path,
+            )
+
+        seeds = select_high_views_per_subscriber_seeds(
+            database_path=self.database_path,
+            now=now,
+        )
+        self.assertEqual(
+            [seed["video_id"] for seed in seeds],
+            ["small-video", "medium-video"],
+        )
+        self.assertEqual(seeds[0]["score"], 50.0)
+
+        record_discovery_seed(
+            "high_views_per_subscriber",
+            seeds[0]["video_id"],
+            seeds[0]["channel_id"],
+            seeds[0]["score"],
+            12,
+            self.database_path,
+        )
+        cooled_seeds = select_high_views_per_subscriber_seeds(
+            database_path=self.database_path,
+            now=now,
+        )
+        self.assertEqual(
+            [seed["video_id"] for seed in cooled_seeds],
+            ["medium-video"],
+        )
+
+    def test_new_profile_channel_keys_deduplicates_and_excludes_known_channels(self):
+        insert_youtube_skimmed(
+            [{
+                "video_name": "Known",
+                "channel_id": "@known",
+                "age": "1 hour ago",
+            }],
+            "youtube.com",
+            self.database_path,
+        )
+        refresh_profile_queue(self.database_path)
+
+        keys = new_profile_channel_keys(
+            [
+                {"channel_id": "@known"},
+                {"channel_id": "@new"},
+                {"channel_id": " @NEW "},
+            ],
+            self.database_path,
+        )
+        self.assertEqual(keys, {"@new"})
 
     def test_youtube_api_queue_excludes_successful_channels_from_scrapers(self):
         insert_youtube_skimmed(

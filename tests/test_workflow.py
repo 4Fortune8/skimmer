@@ -36,7 +36,43 @@ class WorkflowTests(unittest.TestCase):
                 "skimmer.collectors.youtube",
                 "skimmer.collectors.youtube_api",
                 "skimmer.services.profile_manager",
+                "skimmer.services.profile_fallback",
             ],
+        )
+
+    def test_profile_fallback_chain_is_not_retriggered_while_still_running(self):
+        popen_calls = []
+
+        def runner(command, **kwargs):
+            class Result:
+                returncode = 0
+
+            return Result()
+
+        class StillRunningProcess:
+            def poll(self):
+                return None
+
+        def popen(command, **kwargs):
+            popen_calls.append(command[-1])
+            return StillRunningProcess()
+
+        iterations = {"count": 0}
+
+        def sleeper(_):
+            iterations["count"] += 1
+            if iterations["count"] >= 2:
+                raise RuntimeError("stop test loop")
+
+        with self.assertRaisesRegex(RuntimeError, "stop test loop"):
+            workflow.main(sleeper, popen, runner)
+
+        # profile_manager and profile_fallback should each be started only
+        # once, even though the loop ran twice, because both Process stubs
+        # report they are still running (poll() is None) on the second pass.
+        self.assertEqual(
+            popen_calls,
+            ["skimmer.services.profile_manager", "skimmer.services.profile_fallback"],
         )
 
     def test_youtube_uses_configured_cpu(self):

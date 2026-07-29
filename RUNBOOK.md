@@ -122,6 +122,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now skimmer-workflow.service
 ```
 
+After changing application code or the unit file, redeploy and restart the
+workflow from the repository root with:
+
+```bash
+make redeploy
+```
+
+The target installs the tracked unit file, reloads systemd, enables and
+restarts the workflow, then prints its status. It requests `sudo` credentials
+when required.
+
 Use `journalctl -u skimmer-workflow.service -f` to follow the workflow logs.
 
 ## Inspect data

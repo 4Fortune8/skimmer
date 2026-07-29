@@ -1,4 +1,9 @@
-"""Run independent, rate-limited profile collection workers."""
+"""Run the channel ID resolution worker.
+
+vidiq and socialblade are no longer polled continuously here; they run as a
+triggered vidiq->socialblade fallback chain (see profile_fallback.py),
+started once per YouTube feed cycle by workflow.py.
+"""
 
 import fcntl
 import os
@@ -12,8 +17,6 @@ from skimmer.config import PROJECT_ROOT
 
 WORKERS = {
     "youtube-channel-id": "skimmer.collectors.channel_ids",
-    "vidiq": "skimmer.collectors.vidiq",
-    "socialblade": "skimmer.collectors.socialblade",
 }
 DEFAULT_BATCH_SIZE = 100
 DEFAULT_EMPTY_QUEUE_SECONDS = 60

@@ -23,7 +23,17 @@ import urllib.request
 from pathlib import Path
 
 from skimmer.config import PROJECT_ROOT
-from skimmer.storage.bronze import insert_youtube_skimmed, refresh_profile_queue
+from skimmer.collectors.youtube_recommendations import (
+    HighViewsPerSubscriberSelector,
+    RecommendedVideosSurface,
+    collect_recommendation_recovery,
+    extract_recommended_records,
+)
+from skimmer.storage.bronze import (
+    insert_youtube_skimmed,
+    new_profile_channel_keys,
+    refresh_profile_queue,
+)
 # Initialize the Firefox webdriver
  
 
@@ -202,7 +212,7 @@ def scroll_home_feed(driver, steps=10, delay=1):
 
 
 def extract_home_records(driver):
-    return driver.execute_script(
+    records = driver.execute_script(
         """
         return Array.from(document.querySelectorAll('ytd-rich-item-renderer'))
             .map((item) => {
@@ -237,6 +247,24 @@ def extract_home_records(driver):
             })
             .filter(Boolean);
         """
+    )
+    return records or extract_recommended_records(driver)
+
+
+def collect_refreshed_home_records(driver, scroll_steps):
+    """Reload Home after seed viewing and collect its newly influenced feed."""
+    driver.get("https://www.youtube.com")
+    wait_for_home_records(driver)
+    scroll_home_feed(driver, steps=scroll_steps, delay=1)
+    return extract_home_records(driver)
+
+
+def wait_for_home_records(driver):
+    """Wait for YouTube's Home feed cards to become available."""
+    WebDriverWait(driver, 30).until(
+        EC.presence_of_element_located(
+            (By.CSS_SELECTOR, "ytd-rich-item-renderer, yt-lockup-view-model")
+        )
     )
 
 
@@ -274,11 +302,14 @@ def collect_youtube_feed():
             By.CSS_SELECTOR,
             "ytd-mini-guide-entry-renderer:nth-child(1) > a",
         ).click()
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "ytd-rich-item-renderer")
+        try:
+            wait_for_home_records(driver)
+        except (TimeoutException, WebDriverException) as exc:
+            print(
+                "Home feed did not render its video cards "
+                f"({exc.__class__.__name__}); ending this collection cycle."
             )
-        )
+            return False
         home_passes = parse_int_env("YOUTUBE_HOME_PASSES", default=3)
         scroll_steps = parse_int_env("YOUTUBE_HOME_SCROLL_STEPS", default=10)
         records = []
@@ -290,11 +321,7 @@ def collect_youtube_feed():
             if pass_index < home_passes - 1:
                 try:
                     driver.refresh()
-                    WebDriverWait(driver, 30).until(
-                        EC.presence_of_element_located(
-                            (By.CSS_SELECTOR, "ytd-rich-item-renderer")
-                        )
-                    )
+                    wait_for_home_records(driver)
                 except (TimeoutException, WebDriverException) as exc:
                     print(
                         f"Refresh failed on pass {pass_index + 1}/{home_passes} "
@@ -303,19 +330,57 @@ def collect_youtube_feed():
                     )
                     break
 
+        new_home_channels = new_profile_channel_keys(records)
+        stale_threshold = parse_int_env(
+            "YOUTUBE_STALE_HOME_NEW_CHANNEL_THRESHOLD", default=30
+        )
+        print(
+            f"Home feed produced {len(records)} records and "
+            f"{len(new_home_channels)} new channels."
+        )
+        if len(new_home_channels) < stale_threshold:
+            print(
+                f"Home feed is below the {stale_threshold}-channel threshold; "
+                "starting recommendation recovery."
+            )
+            selector = HighViewsPerSubscriberSelector.from_environment()
+            surface = RecommendedVideosSurface.from_environment()
+            recommendation_records = collect_recommendation_recovery(
+                driver,
+                selector,
+                surface,
+            )
+            records.extend(recommendation_records)
+            try:
+                refreshed_home_records = collect_refreshed_home_records(
+                    driver, scroll_steps
+                )
+            except (TimeoutException, WebDriverException) as exc:
+                print(
+                    "Home refresh after recommendation recovery failed "
+                    f"({exc.__class__.__name__}); retaining recommendation records."
+                )
+                refreshed_home_records = []
+            records.extend(refreshed_home_records)
+            print(
+                f"Recommendation recovery collected "
+                f"{len(recommendation_records)} recommendation records and "
+                f"{len(refreshed_home_records)} refreshed Home records."
+            )
+
         inserted = insert_youtube_skimmed(
             records,
             "https://www.youtube.com",
         )
         refresh_profile_queue()
         print(f"Stored {inserted} YouTube feed records.")
+        return True
     finally:
         driver.quit()
 
 
 def main():
-    collect_youtube_feed()
-    return 0
+    return 0 if collect_youtube_feed() else 1
 
 
 if __name__ == "__main__":

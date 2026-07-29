@@ -2,6 +2,7 @@
 /.drivers
 /.drivers/*
 /.profile-manager.lock
+/.socialblade-cloudflare-cooldown
 /.socialblade-firefox-profile
 /.socialblade-firefox-profile.lock
 __pycache__/
