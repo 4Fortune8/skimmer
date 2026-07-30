@@ -260,9 +260,19 @@ LIMIT 100;
 "
 ```
 
-The service pins only the YouTube feed collector process to CPU 0 through
-`SKIMMER_YOUTUBE_CPU=0`. Remove or change that setting if CPU 0 is not a
-lower-performance core on the host.
+The service does not pin the collectors to specific cores. It yields CPU
+instead through `Nice=10` and `CPUWeight=20`, so the scheduler is free to place
+the browser on whichever cores are idle (including the fast ones) and demotes
+the service automatically when interactive work needs the machine. On the
+RK3588 this matters: CPUs 0-3 are Cortex-A55 efficiency cores and CPUs 4-7 are
+Cortex-A76 performance cores, so a fixed mask can strand the browser on the
+slowest hardware in the box.
+
+`SKIMMER_YOUTUBE_CPU` is still honoured if set: it wraps the YouTube feed
+collector in `taskset -c <spec>`, and the mask is inherited by geckodriver and
+every Firefox child. Use it only when you need a hard guarantee that collection
+never touches a particular core, and prefer a whole cluster (`0-3`) over a
+single core.
 
 If `skimmer-youtube-api` reports a `quotaExceeded` error, it stops the current
 run cleanly (exit code 0) and leaves any unclaimed channels for the next
