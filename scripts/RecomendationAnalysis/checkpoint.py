@@ -7,8 +7,7 @@ manifest so a re-run can reload instead of recompute.
 
 Cache entries are keyed by a fingerprint of:
 
-- the resolved database path plus its size and modification time, so ingesting
-  new rows invalidates the cache;
+- the resolved database path plus a content fingerprint of analysis-relevant tables (with file-stat fallback);
 - the analysis parameters (shorts filter settings, ``now``, algorithm params),
   so tuning a knob never silently reuses a stale frame;
 - the source code of this package, so editing an algorithm invalidates the
