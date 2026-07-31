@@ -220,7 +220,6 @@ def _load_cache(
     cache: str | Path | MutableMapping[str, bool | None] | None,
 ) -> tuple[Path | None, MutableMapping[str, bool | None]]:
     if isinstance(cache, MutableMapping):
-        _MEMORY_CACHE.update({str(key): _coerce_cached_value(value) for key, value in cache.items()})
         return None, cache
     disk_path = DEFAULT_CACHE_PATH if cache is None else Path(cache)
     data: MutableMapping[str, bool | None] = _MEMORY_CACHE if cache is None else {}
