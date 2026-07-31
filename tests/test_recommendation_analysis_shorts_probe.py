@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from urllib import error
 
 import pandas as pd
 import pytest
