@@ -9,6 +9,7 @@ comparable 0-1 scale, and blends the evidence into one lead list.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Mapping
@@ -17,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 try:
-    from . import data_access, metrics
+    from . import data_access, metrics, shorts_probe
     from .algorithms import (
         breakout_outliers,
         channel_relative,
@@ -29,6 +30,7 @@ try:
 except ImportError:  # pragma: no cover
     import data_access  # type: ignore[no-redef]
     import metrics  # type: ignore[no-redef]
+    import shorts_probe  # type: ignore[no-redef]
     from algorithms import (  # type: ignore[no-redef]
         breakout_outliers,
         channel_relative,
@@ -81,6 +83,7 @@ IDENTITY_COLUMNS = [
 BASE_OUTPUT_COLUMNS = ["video_id", "composite_score", "algorithms_hit", "algorithms", "reasons"]
 OUTPUT_COLUMNS = (
     BASE_OUTPUT_COLUMNS
+    + ["is_short_confirmed"]
     + [f"score_{name}" for name in ALGORITHMS]
     + [f"raw_{name}" for name in ALGORITHMS]
     + IDENTITY_COLUMNS
@@ -91,19 +94,39 @@ def load_analysis_frame(
     db_path: str | Path | None = None,
     now: pd.Timestamp | str | None = None,
     with_snapshots: bool = True,
+    exclude_shorts: bool = True,
+    shorts_max_duration_seconds: int = metrics.SHORTS_MAX_DURATION_SECONDS,
+    drop_unknown_duration: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame | None]:
     """Load and enrich the latest joined frame, plus optional video history.
 
     The database is read once for latest joined rows and, when requested, once
     for all video snapshots so downstream algorithms can share the same frames.
+
+    Shorts are removed before enrichment so that per-channel view baselines and
+    weight-class norms describe long-form performance only; a short with a
+    million views is a much weaker idea signal than a long-form video with the
+    same count. Snapshots are restricted to the surviving videos so the velocity
+    algorithm sees a consistent population.
     """
 
     with data_access.connect(db_path) as conn:
-        df = metrics.enrich(data_access.load_joined(conn=conn), now=now)
+        df = data_access.load_joined(conn=conn)
         snapshots = data_access.load_video_snapshots(conn=conn) if with_snapshots else None
+    if exclude_shorts:
+        before = len(df)
+        df = metrics.exclude_shorts(
+            df,
+            max_duration_seconds=shorts_max_duration_seconds,
+            drop_unknown_duration=drop_unknown_duration,
+        )
+        logger.info("Excluded %d shorts (<=%ds); %d videos remain.", before - len(df), shorts_max_duration_seconds, len(df))
+    df = metrics.enrich(df, now=now)
     df = _coerce_video_id(df)
     if snapshots is not None:
         snapshots = _coerce_video_id(snapshots)
+        if exclude_shorts:
+            snapshots = snapshots[snapshots["video_id"].isin(set(df["video_id"]))].copy()
     return df, snapshots
 
 
@@ -270,6 +293,10 @@ def combine(
     for column in IDENTITY_COLUMNS:
         if column not in combined:
             combined[column] = np.nan
+    if "is_short_confirmed" not in combined:
+        combined["is_short_confirmed"] = pd.Series(pd.NA, index=combined.index, dtype="boolean")
+    else:
+        combined["is_short_confirmed"] = combined["is_short_confirmed"].astype("boolean")
     for name in ALGORITHMS:
         score_col = f"score_{name}"
         raw_col = f"raw_{name}"
@@ -302,16 +329,49 @@ def generate_leads(
     filters: Mapping[str, Any] | None = None,
     now: pd.Timestamp | str | None = None,
     export_path: str | Path | None = None,
+    exclude_shorts: bool = True,
+    shorts_max_duration_seconds: int = metrics.SHORTS_MAX_DURATION_SECONDS,
+    drop_unknown_duration: bool = False,
+    verify_shorts: bool = True,
+    verify_shorts_max_workers: int = shorts_probe.DEFAULT_MAX_WORKERS,
+    verify_shorts_timeout: float = shorts_probe.DEFAULT_TIMEOUT,
+    verify_shorts_cache: Any = None,
+    verify_shorts_over_fetch: float = 2.0,
 ) -> pd.DataFrame:
-    """Run the full composite lead pipeline and optionally export a CSV."""
+    """Run the full composite lead pipeline and optionally export a CSV.
 
-    df, snapshots = load_analysis_frame(db_path=db_path, now=now, with_snapshots=True)
+    When ``verify_shorts`` is enabled, Shorts URL verification runs after all
+    scoring/filtering and only on the final candidate list. For finite
+    ``top_n`` calls, the candidate list is over-fetched by
+    ``verify_shorts_over_fetch`` before confirmed Shorts are dropped, then the
+    surviving rows are truncated back to ``top_n``.
+    """
+
+    df, snapshots = load_analysis_frame(
+        db_path=db_path,
+        now=now,
+        with_snapshots=True,
+        exclude_shorts=exclude_shorts,
+        shorts_max_duration_seconds=shorts_max_duration_seconds,
+        drop_unknown_duration=drop_unknown_duration,
+    )
     results = run_algorithms(df, snapshots=snapshots, params=params)
     normalized = normalize_scores(results)
     leads = combine(normalized, weights=weights, source_df=df)
     leads = _apply_filters(leads, filters)
-    if top_n is not None:
+    if verify_shorts:
+        leads = _verify_shorts_for_final_candidates(
+            leads,
+            top_n=top_n,
+            max_workers=verify_shorts_max_workers,
+            timeout=verify_shorts_timeout,
+            cache=verify_shorts_cache,
+            over_fetch=verify_shorts_over_fetch,
+        )
+    elif top_n is not None:
         leads = leads.head(int(top_n)).copy()
+    if not verify_shorts and "is_short_confirmed" not in leads.columns:
+        leads["is_short_confirmed"] = pd.Series(pd.NA, index=leads.index, dtype="boolean")
     leads = leads.reset_index(drop=True)
     leads.attrs["algorithm_counts"] = {name: len(frame) for name, frame in results.items()}
     leads.attrs["algorithm_failures"] = _collect_failures(results)
@@ -387,6 +447,54 @@ def _dedupe_algorithm_result(frame: pd.DataFrame) -> pd.DataFrame:
     result = result.sort_values(["video_id", "_score_sort"], ascending=[True, False])
     result = result.drop_duplicates("video_id", keep="first").drop(columns="_score_sort")
     return result.reset_index(drop=True)
+
+
+def _verify_shorts_for_final_candidates(
+    leads: pd.DataFrame,
+    *,
+    top_n: int | None,
+    max_workers: int,
+    timeout: float,
+    cache: Any,
+    over_fetch: float,
+) -> pd.DataFrame:
+    if leads.empty:
+        result = leads.copy()
+        result["is_short_confirmed"] = pd.Series(pd.NA, index=result.index, dtype="boolean")
+        result.attrs["shorts_probe"] = {"probed": 0, "confirmed_shorts": 0, "undetermined": 0, "dropped": 0}
+        return result
+
+    candidate_count = len(leads) if top_n is None else min(len(leads), _shorts_probe_limit(int(top_n), over_fetch))
+    candidates = leads.head(candidate_count).copy()
+    statuses = shorts_probe.probe_videos(
+        candidates["video_id"].dropna().astype("string").tolist(),
+        max_workers=max_workers,
+        timeout=timeout,
+        cache=cache,
+    )
+    status_values = pd.Series(candidates["video_id"].astype("string").map(statuses), index=candidates.index, dtype="boolean")
+    candidates["is_short_confirmed"] = status_values
+    confirmed = int(status_values.fillna(False).sum())
+    undetermined = int(status_values.isna().sum())
+    verified = candidates.loc[~candidates["is_short_confirmed"].fillna(False)].copy()
+    if top_n is not None:
+        verified = verified.head(int(top_n)).copy()
+    diagnostics = {
+        "probed": len(statuses),
+        "confirmed_shorts": confirmed,
+        "undetermined": undetermined,
+        "dropped": confirmed,
+    }
+    verified.attrs.update(leads.attrs)
+    verified.attrs["shorts_probe"] = diagnostics
+    return verified.reset_index(drop=True)
+
+
+def _shorts_probe_limit(top_n: int, over_fetch: float) -> int:
+    if top_n <= 0:
+        return 0
+    multiplier = max(1.0, float(over_fetch))
+    return max(top_n, int(math.ceil(top_n * multiplier)))
 
 
 def _minmax(scores: pd.Series) -> pd.Series:

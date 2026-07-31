@@ -10,6 +10,45 @@ import pandas as pd
 SUB_WEIGHT_CLASSES = ["<1k", "1k-10k", "10k-50k", "50k-200k", "200k-1M", "1M+"]
 VIDEO_COUNT_CLASSES = ["<50", "50-300", "300-1000", "1000+"]
 
+SHORTS_MAX_DURATION_SECONDS = 60
+
+
+def add_duration_flags(
+    df: pd.DataFrame,
+    max_duration_seconds: int = SHORTS_MAX_DURATION_SECONDS,
+) -> pd.DataFrame:
+    """Return a copy with an ``is_short`` flag derived from ``duration_seconds``.
+
+    Videos at or below ``max_duration_seconds`` are treated as shorts. Rows with
+    an unknown duration keep ``pd.NA`` so callers can decide how to treat them.
+    """
+
+    result = df.copy()
+    duration = pd.to_numeric(result["duration_seconds"], errors="coerce")
+    result["is_short"] = (duration <= max_duration_seconds).astype("boolean").where(duration.notna())
+    return result
+
+
+def exclude_shorts(
+    df: pd.DataFrame,
+    max_duration_seconds: int = SHORTS_MAX_DURATION_SECONDS,
+    drop_unknown_duration: bool = False,
+) -> pd.DataFrame:
+    """Drop shorts so view counts are only compared across long-form videos.
+
+    A short reaching a million views is a far weaker idea signal than a long-form
+    video doing the same, so shorts are removed before any metric is derived.
+    Filtering here rather than inside each algorithm also keeps per-channel
+    baselines free of shorts. Rows with an unknown duration are kept unless
+    ``drop_unknown_duration`` is set.
+    """
+
+    flagged = add_duration_flags(df, max_duration_seconds=max_duration_seconds)
+    is_short = flagged["is_short"]
+    keep = is_short.isna() if not drop_unknown_duration else pd.Series(False, index=flagged.index)
+    keep = keep | (is_short == False)  # noqa: E712 - pd.NA-safe comparison
+    return flagged.loc[keep.fillna(False)].drop(columns="is_short").copy()
+
 
 def safe_ratio(numerator: Any, denominator: Any, fill: float = np.nan) -> Any:
     """Divide elementwise while replacing zero, null, and infinite results."""

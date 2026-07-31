@@ -9,6 +9,94 @@ from scripts.RecomendationAnalysis import metrics
 NOW = "2026-07-31T00:00:00Z"
 
 
+def test_add_duration_flags_marks_shorts_unknowns_and_does_not_mutate():
+    df = pd.DataFrame(
+        {
+            "video_id": ["below", "at_boundary", "above", "missing", "junk"],
+            "duration_seconds": [59, 60, 61, None, "N/A"],
+        }
+    )
+    before = df.copy(deep=True)
+
+    out = metrics.add_duration_flags(df)
+
+    pd.testing.assert_frame_equal(df, before)
+    assert str(out["is_short"].dtype) == "boolean"
+    assert out["is_short"].tolist()[:3] == [True, True, False]
+    assert pd.isna(out.loc[3, "is_short"])
+    assert pd.isna(out.loc[4, "is_short"])
+
+
+def test_exclude_shorts_boundary_keeps_long_and_unknown_by_default():
+    df = pd.DataFrame(
+        {
+            "video_id": ["v59", "v60", "v61", "unknown", "long"],
+            "duration_seconds": [59, 60, 61, None, 3600],
+            "title": ["a", "b", "c", "d", "e"],
+        }
+    )
+
+    out = metrics.exclude_shorts(df)
+
+    assert out["video_id"].tolist() == ["v61", "unknown", "long"]
+    assert list(out.columns) == list(df.columns)
+
+
+def test_exclude_shorts_can_drop_unknown_duration():
+    df = pd.DataFrame(
+        {
+            "video_id": ["v59", "v60", "v61", "unknown", "long"],
+            "duration_seconds": [59, 60, 61, None, 3600],
+        }
+    )
+
+    out = metrics.exclude_shorts(df, drop_unknown_duration=True)
+
+    assert out["video_id"].tolist() == ["v61", "long"]
+    assert list(out.columns) == list(df.columns)
+
+
+def test_exclude_shorts_honours_custom_duration_boundary():
+    df = pd.DataFrame(
+        {
+            "video_id": ["v179", "v180", "v181", "unknown"],
+            "duration_seconds": [179, 180, 181, None],
+        }
+    )
+
+    out = metrics.exclude_shorts(df, max_duration_seconds=180)
+
+    assert out["video_id"].tolist() == ["v181", "unknown"]
+    assert list(out.columns) == list(df.columns)
+
+
+def test_exclude_shorts_empty_frame_preserves_columns():
+    df = pd.DataFrame({"video_id": pd.Series(dtype="string"), "duration_seconds": pd.Series(dtype="float64")})
+
+    out = metrics.exclude_shorts(df)
+
+    assert out.empty
+    assert list(out.columns) == list(df.columns)
+
+
+def test_exclude_shorts_all_shorts_returns_empty_without_helper_column():
+    df = pd.DataFrame({"video_id": ["v0", "v60"], "duration_seconds": [0, 60]})
+
+    out = metrics.exclude_shorts(df)
+
+    assert out.empty
+    assert list(out.columns) == list(df.columns)
+
+
+def test_exclude_shorts_treats_non_numeric_duration_as_unknown_not_zero():
+    df = pd.DataFrame({"video_id": ["junk", "short", "long"], "duration_seconds": ["N/A", "0", "61"]})
+
+    out = metrics.exclude_shorts(df)
+
+    assert out["video_id"].tolist() == ["junk", "long"]
+    assert list(out.columns) == list(df.columns)
+
+
 def test_safe_ratio_handles_scalars_series_bad_denominators_and_fill():
     assert metrics.safe_ratio(10, 2) == 5
     assert metrics.safe_ratio(-10, 2) == -5

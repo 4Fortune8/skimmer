@@ -7,10 +7,11 @@ when adding modules that need sibling imports.
 """
 
 try:
-    from . import data_access, leads, metrics
+    from . import checkpoint, data_access, leads, metrics
 except ImportError:  # pragma: no cover - supports direct sys.path imports.
+    import checkpoint  # type: ignore[no-redef]
     import data_access  # type: ignore[no-redef]
     import leads  # type: ignore[no-redef]
     import metrics  # type: ignore[no-redef]
 
-__all__ = ["data_access", "leads", "metrics"]
+__all__ = ["checkpoint", "data_access", "leads", "metrics"]

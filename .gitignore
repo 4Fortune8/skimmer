@@ -1,4 +1,5 @@
 /data
+/data/output/shorts_probe_cache.json
 /.drivers
 /.drivers/*
 /.profile-manager.lock
