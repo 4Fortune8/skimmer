@@ -31,6 +31,21 @@ def frame() -> pd.DataFrame:
     )
 
 
+@pytest.fixture
+def stem_frame() -> pd.DataFrame:
+    """Real reaction-template spellings, which vary derivationally, not by plural."""
+
+    return pd.DataFrame(
+        [
+            {"video_id": "p", "title": "British Family Reacts to 15 Things Only Americans Do"},
+            {"video_id": "q", "title": "Europeans Couldn't Believe How America Celebrates the 4th of July"},
+            {"video_id": "r", "title": "British Family Reacts to Europeans WEREN'T READY for July 4th in America!"},
+            {"video_id": "s", "title": "The PanAmerican Highway, end to end"},
+            {"video_id": "t", "title": "I tried a Japanese convenience store breakfast"},
+        ]
+    )
+
+
 def _ids(df: pd.DataFrame) -> list[str]:
     return sorted(df["video_id"].tolist())
 
@@ -131,6 +146,92 @@ def test_empty_frame_is_handled():
     empty = pd.DataFrame(columns=["video_id", "title"])
     assert exclusions.apply(empty, [exclusions.make_rule("fifa")]).empty
     assert not exclusions.mask(empty, [exclusions.make_rule("fifa")]).any()
+
+
+def test_stem_term_matches_the_whole_word_family(stem_frame):
+    """The reaction template varies derivationally, so one stem must span it."""
+
+    europe = exclusions.make_rule(["america*", "europe*"])
+    assert _ids(stem_frame[exclusions.rule_mask(stem_frame, europe)]) == ["q", "r"]
+
+    # "Americans" against a bare 'american' term is the miss that started this.
+    british = exclusions.make_rule(["america*", "brit*"])
+    assert _ids(stem_frame[exclusions.rule_mask(stem_frame, british)]) == ["p", "r"]
+
+    # Neither rule reaches the two titles that are not the template.
+    assert _ids(stem_frame[exclusions.mask(stem_frame, [europe, british])]) == ["p", "q", "r"]
+
+
+def test_stem_term_replaces_three_exact_rules(stem_frame):
+    """What ['europeans','americans'], ['european','american'] and ['european','america'] did."""
+
+    exact_rules = [
+        exclusions.make_rule(["europeans", "americans"]),
+        exclusions.make_rule(["european", "american"]),
+        exclusions.make_rule(["european", "america"]),
+    ]
+    stemmed = [exclusions.make_rule(["america*", "europe*"])]
+    exact_hits = set(stem_frame.loc[exclusions.mask(stem_frame, exact_rules), "video_id"])
+    stem_hits = set(stem_frame.loc[exclusions.mask(stem_frame, stemmed), "video_id"])
+    assert exact_hits < stem_hits
+    # "Europeans ... in America" mixes a plural with a bare noun, so no single
+    # exact rule covers it; this is the title that motivated stemming.
+    assert "r" in stem_hits and "r" not in exact_hits
+
+
+def test_stem_still_has_to_start_a_word(stem_frame):
+    """A stem is a prefix of a word, not a substring of one."""
+
+    rule = exclusions.make_rule("america*")
+    matched = _ids(stem_frame[exclusions.rule_mask(stem_frame, rule)])
+    assert "s" not in matched  # "PanAmerican" — the stem does not start the word
+    assert "p" in matched
+
+
+def test_stemming_is_opt_in_so_exact_terms_stay_exact(stem_frame):
+    """Without the marker nothing broadens; this is why god* cannot reach Godzilla."""
+
+    assert not exclusions.rule_mask(stem_frame, exclusions.make_rule("american")).any()
+    godzilla = pd.DataFrame([{"video_id": "z", "title": "Godzilla vs the world"}])
+    assert not exclusions.rule_mask(godzilla, exclusions.make_rule("god")).any()
+    assert exclusions.rule_mask(godzilla, exclusions.make_rule("god*")).all()
+
+
+def test_stem_marker_survives_normalisation_into_the_saved_rule():
+    """Normalising first would delete the '*' as punctuation and silently un-stem the rule."""
+
+    rule = exclusions.make_rule(["America*", "  brit* "])
+    assert rule["terms"] == ["america*", "brit*"]
+    assert exclusions.normalize_term("america*") == "america"
+    assert exclusions.parse_term("america*") == ("america", True)
+    assert exclusions.parse_term("america") == ("america", False)
+
+
+def test_stem_applies_to_the_last_word_of_a_phrase():
+    frame = pd.DataFrame(
+        [
+            {"video_id": "a", "title": "DUNE | Official Trailers, all of them"},
+            {"video_id": "b", "title": "An official statement about trailers"},
+        ]
+    )
+    rule = exclusions.make_rule("official trailer*")
+    assert _ids(frame[exclusions.rule_mask(frame, rule)]) == ["a"]
+
+
+def test_make_rule_rejects_a_stem_too_short_to_be_selective():
+    with pytest.raises(ValueError):
+        exclusions.make_rule("a*")
+    with pytest.raises(ValueError):
+        exclusions.make_rule(["america*", "b*"])
+
+
+def test_load_skips_an_unusable_stem_without_dropping_the_file(tmp_path):
+    path = tmp_path / "title_exclusions.json"
+    path.write_text(
+        json.dumps({"version": 1, "rules": [{"terms": ["a*"]}, {"terms": ["america*"]}]}),
+        encoding="utf-8",
+    )
+    assert [rule["terms"] for rule in exclusions.load(path)] == [["america*"]]
 
 
 def test_make_rule_normalizes_and_dedupes_terms():

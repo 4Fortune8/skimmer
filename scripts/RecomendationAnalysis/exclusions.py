@@ -56,8 +56,12 @@ SCOPES = domain.SCOPES
 DEFAULT_SCOPE = domain.DEFAULT_SCOPE
 DEFAULT_FIELDS = domain.DEFAULT_FIELDS
 
+STEM_MARKER = domain.STEM_MARKER
+MIN_STEM_LENGTH = domain.MIN_STEM_LENGTH
+
 normalize_text = domain.normalize_text
 normalize_term = domain.normalize_term
+parse_term = domain.parse_term
 term_pattern = domain.term_pattern
 make_rule = domain.make_rule
 rule_id = domain.rule_id
@@ -136,10 +140,11 @@ def rule_mask(df: pd.DataFrame, rule: Mapping[str, Any]) -> pd.Series:
 
     mask_series = pd.Series(True, index=df.index, dtype=bool)
     for term in rule.get("terms", []):
-        normalized_term = normalize_term(term)
-        if not normalized_term:
+        if not normalize_term(term):
             continue
-        mask_series &= haystack.str.contains(term_pattern(normalized_term), regex=True, na=False)
+        # The raw term, not the normalised one: normalisation drops the trailing
+        # ``*`` that tells the pattern builder to match the whole word family.
+        mask_series &= haystack.str.contains(term_pattern(term), regex=True, na=False)
         if not mask_series.any():
             break
     return mask_series

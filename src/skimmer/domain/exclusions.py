@@ -20,6 +20,18 @@ does not fire on "fifate" and casing and punctuation are irrelevant. A term
 containing a space is a contiguous phrase (``official trailer``); to mean "both
 words anywhere in the title", pass them as separate terms instead.
 
+A term ending in ``*`` matches any word *starting* with the stem, so
+``america*`` covers "America", "American" and "Americans" in one term. The
+reaction-channel template is the case that demands it: the variation there is
+derivational, not plural ("Europe" / "European" / "Europeans"), so folding
+plurals would not unify it and writing one rule per spelling means three rules
+that each miss the next spelling. Stemming is opt-in per term rather than the
+default because the same mechanism applied everywhere would quietly broaden
+every existing rule — ``god*`` reaches "Godzilla", "goddess" and "godfather" —
+and there would be no way left to express an exact term. Loose stems stay safe
+by co-occurrence: ``brit*`` alone would take Britney Spears with it, but
+``brit*`` *and* ``america*`` in one title is the template nearly every time.
+
 Rules carry a ``scope`` that the *analysis* uses to decide when to apply them:
 
 ``leads``   removes matches from the scored results, after the algorithms have
@@ -53,6 +65,8 @@ SCOPES = ("leads", "corpus")
 DEFAULT_SCOPE = "leads"
 DEFAULT_FIELDS = ("title",)
 PATH_ENV_VAR = "SKIMMER_EXCLUSIONS_PATH"
+STEM_MARKER = "*"
+MIN_STEM_LENGTH = 3
 
 _APOSTROPHES = str.maketrans("", "", "'’ʼ`")
 _POSSESSIVE = re.compile(r"['’ʼ`]s(?![0-9a-z])")
@@ -102,25 +116,58 @@ def normalize_text(value: Any) -> str:
     return _WHITESPACE.sub(" ", _NON_WORD.sub(" ", text)).strip()
 
 
-def normalize_term(term: Any) -> str:
-    """Return a term in the same normal form as titles, or ``''`` if it is empty."""
+def parse_term(term: Any) -> tuple[str, bool]:
+    """Return ``(normalised_term, is_stem)`` for a raw term.
 
-    return normalize_text(term)
+    The ``*`` marker has to be read *before* normalisation, because normalising
+    first deletes it as punctuation and silently turns a stem into an exact term.
+    Only a trailing marker on the whole term is honoured; a ``*`` anywhere else
+    falls through normalisation as a word separator, as it always has.
+    """
+
+    text = "" if term is None else str(term)
+    is_stem = text.rstrip().endswith(STEM_MARKER)
+    if is_stem:
+        text = text.rstrip()[: -len(STEM_MARKER)]
+    return normalize_text(text), is_stem
+
+
+def normalize_term(term: Any) -> str:
+    """Return a term in the same normal form as titles, or ``''`` if it is empty.
+
+    The stem marker is not part of the normal form, so ``america*`` normalises to
+    ``america``. Callers deciding *how* to match must use :func:`parse_term` or
+    :func:`term_pattern`; this function answers only "what word is this".
+    """
+
+    return parse_term(term)[0]
 
 
 def term_pattern(term: str) -> re.Pattern[str]:
-    """Return the word-boundary pattern for an already-normalised term.
+    """Return the search pattern for a term, honouring a trailing ``*``.
 
-    Exposed so that a vectorised caller searches for exactly what the scalar
-    path searches for; two implementations of "does this term appear" would be
-    two chances to disagree.
+    Accepts raw or already-normalised terms, and is the only place that turns a
+    term into a regex, so a vectorised caller searches for exactly what the
+    scalar path searches for; two implementations of "does this term appear"
+    would be two chances to disagree.
+
+    A stem drops the closing word boundary and consumes the rest of the word
+    instead, which is the whole difference between ``american`` and
+    ``american(s)``. The opening boundary is kept either way, so a stem still
+    has to start a word: ``america*`` never fires inside "panamerican".
     """
 
-    parts = [re.escape(part) for part in term.split(" ") if part]
-    if not parts:
-        raise ValueError("cannot build a pattern for an empty term")
-    body = r"\s+".join(parts)
-    return re.compile(r"(?<![0-9a-z])" + body + r"(?![0-9a-z])")
+    normalized, is_stem = parse_term(term)
+    words = [word for word in normalized.split(" ") if word]
+    if not words:
+        raise ValueError(f"cannot build a pattern for an empty term: {term!r}")
+    if is_stem and len(words[-1]) < MIN_STEM_LENGTH:
+        raise ValueError(
+            f"stem {term!r} is shorter than {MIN_STEM_LENGTH} characters; it would match most titles"
+        )
+    body = r"\s+".join(re.escape(word) for word in words)
+    trailing = r"[0-9a-z]*" if is_stem else r"(?![0-9a-z])"
+    return re.compile(r"(?<![0-9a-z])" + body + trailing)
 
 
 def make_rule(
@@ -135,14 +182,24 @@ def make_rule(
 
     ``terms`` may be a single string or an iterable; every term must survive
     normalisation, because a rule whose terms all normalise away would match
-    every row.
+    every row. A trailing ``*`` is preserved through normalisation, since it is
+    part of what the term *means* rather than punctuation to be folded away, and
+    is validated here so an unusable stem is refused at the point it is written
+    rather than at the point it is searched.
     """
 
     if isinstance(terms, str):
         raw_terms: list[str] = [terms]
     else:
         raw_terms = [str(term) for term in terms]
-    cleaned = [term for term in (normalize_term(term) for term in raw_terms) if term]
+    cleaned: list[str] = []
+    for raw_term in raw_terms:
+        normalized, is_stem = parse_term(raw_term)
+        if not normalized:
+            continue
+        canonical_term = normalized + STEM_MARKER if is_stem else normalized
+        term_pattern(canonical_term)  # rejects a stem too short to be selective
+        cleaned.append(canonical_term)
     if not cleaned:
         raise ValueError(f"rule has no usable terms after normalisation: {raw_terms!r}")
     if scope not in SCOPES:
@@ -348,10 +405,9 @@ def rule_matches(rule: Mapping[str, Any], record: Any) -> bool:
     if not text:
         return False
     for term in rule.get("terms", []):
-        normalized = normalize_term(term)
-        if not normalized:
+        if not normalize_term(term):
             continue
-        if not term_pattern(normalized).search(text):
+        if not term_pattern(term).search(text):
             return False
     return True
 
