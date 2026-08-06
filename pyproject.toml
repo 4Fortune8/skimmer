@@ -19,6 +19,8 @@ analysis = [
     "numpy",
     "pandas",
     "pyarrow",
+    "fasttext-wheel",
+    "stopwordsiso",
 ]
 
 [project.scripts]
@@ -27,6 +29,7 @@ skimmer-youtube-api = "skimmer.collectors.youtube_api:main"
 skimmer-vidiq = "skimmer.collectors.vidiq:main"
 skimmer-socialblade = "skimmer.collectors.socialblade:main"
 skimmer-resolve-channel-ids = "skimmer.collectors.channel_ids:main"
+skimmer-video-languages = "skimmer.collectors.video_languages:main"
 skimmer-profile-manager = "skimmer.services.profile_manager:main"
 skimmer-workflow = "skimmer.services.workflow:main"
 

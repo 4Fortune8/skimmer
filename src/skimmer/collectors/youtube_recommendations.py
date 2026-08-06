@@ -9,6 +9,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 
+from skimmer.domain import exclusions
 from skimmer.storage.bronze import (
     new_profile_channel_keys,
     record_discovery_seed,
@@ -41,7 +42,20 @@ class DiscoverySeed:
 
 
 class HighViewsPerSubscriberSelector:
-    """Rank recent videos by views per subscriber for channels below a cap."""
+    """Rank recent videos by views per subscriber for channels below a cap.
+
+    A seed is not just a video that gets read; it is a watch page whose sidebar
+    becomes the next round of discovered channels. Seeding on a topic already
+    ruled out therefore does not merely waste a page visit, it pulls the corpus
+    further towards that topic, because YouTube recommends more of what it was
+    given. Exclusion rules are applied here for that reason: the cheapest place
+    to refuse content is before it is ever fetched.
+
+    Both rule scopes apply during collection. ``leads`` versus ``corpus`` decides
+    how the *analysis* treats videos already gathered; either way the operator
+    has said they do not want more of this, and that is the only question a seed
+    selection needs answered.
+    """
 
     name = "high_views_per_subscriber"
 
@@ -53,6 +67,8 @@ class HighViewsPerSubscriberSelector:
         minimum_video_views=10_000,
         video_lookback_days=90,
         seed_cooldown_days=7,
+        exclusion_rules=None,
+        exclusion_over_fetch=4,
     ):
         self.limit = limit
         self.minimum_subscribers = minimum_subscribers
@@ -60,6 +76,10 @@ class HighViewsPerSubscriberSelector:
         self.minimum_video_views = minimum_video_views
         self.video_lookback_days = video_lookback_days
         self.seed_cooldown_days = seed_cooldown_days
+        self.exclusion_rules = list(exclusion_rules or [])
+        if exclusion_over_fetch < 1:
+            raise ValueError("exclusion_over_fetch must be at least one.")
+        self.exclusion_over_fetch = exclusion_over_fetch
 
     @classmethod
     def from_environment(cls):
@@ -80,11 +100,30 @@ class HighViewsPerSubscriberSelector:
             seed_cooldown_days=_positive_int_env(
                 "YOUTUBE_DISCOVERY_SEED_COOLDOWN_DAYS", 7
             ),
+            exclusion_rules=exclusions.load(),
+            exclusion_over_fetch=_positive_int_env(
+                "YOUTUBE_DISCOVERY_EXCLUSION_OVER_FETCH", 4
+            ),
         )
 
     def select(self, database_path=None):
+        """Return up to ``limit`` seeds, skipping any the exclusion rules match.
+
+        Filtering happens after the query rather than inside it because a rule is
+        a conjunction of word-boundary phrases over a normalised title, which
+        SQL ``LIKE`` cannot express without matching substrings the rules
+        deliberately exclude. The query is therefore over-fetched and truncated
+        after filtering, the same shape the leads pipeline already uses for
+        Shorts verification. Running short of seeds is reported rather than
+        passed over silently, since it means the ranking is exhausted rather
+        than the rules being cheap.
+        """
+
+        fetch_limit = self.limit
+        if self.exclusion_rules:
+            fetch_limit = self.limit * self.exclusion_over_fetch
         records = select_high_views_per_subscriber_seeds(
-            limit=self.limit,
+            limit=fetch_limit,
             minimum_subscribers=self.minimum_subscribers,
             maximum_subscribers=self.maximum_subscribers,
             minimum_video_views=self.minimum_video_views,
@@ -92,7 +131,23 @@ class HighViewsPerSubscriberSelector:
             seed_cooldown_days=self.seed_cooldown_days,
             database_path=database_path,
         )
-        return [DiscoverySeed(**record) for record in records]
+        seeds = [DiscoverySeed(**record) for record in records]
+        if not self.exclusion_rules:
+            return seeds
+
+        kept, dropped = exclusions.partition(seeds, self.exclusion_rules)
+        for seed, rule in dropped:
+            print(
+                f"Skipping seed {seed.video_id} ({seed.title!r}): "
+                f"matches exclusion {exclusions.describe_rule(rule)}."
+            )
+        if len(kept) < self.limit and len(records) == fetch_limit:
+            print(
+                f"Only {len(kept)} of {self.limit} seeds survived the exclusion "
+                f"rules within an over-fetch of {self.exclusion_over_fetch}x; "
+                "raise YOUTUBE_DISCOVERY_EXCLUSION_OVER_FETCH to look deeper."
+            )
+        return kept[: self.limit]
 
 
 def extract_recommended_records(driver):

@@ -227,6 +227,8 @@ def _create_tables(connection):
             views,
             likes,
             comments,
+            default_audio_language TEXT,
+            default_language TEXT,
             data_digest TEXT NOT NULL UNIQUE
         );
         CREATE INDEX IF NOT EXISTS idx_bronze_youtubeapi_video_stats_video_time
@@ -338,6 +340,23 @@ def _ensure_profile_queue_columns(connection):
         )
 
 
+def _ensure_youtubeapi_video_columns(connection):
+    columns = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(bronze_youtubeapi_video_stats)")
+    }
+    if not columns:
+        return
+    if "default_audio_language" not in columns:
+        connection.execute(
+            "ALTER TABLE bronze_youtubeapi_video_stats ADD COLUMN default_audio_language TEXT"
+        )
+    if "default_language" not in columns:
+        connection.execute(
+            "ALTER TABLE bronze_youtubeapi_video_stats ADD COLUMN default_language TEXT"
+        )
+
+
 def _ensure_youtube_feed_columns(connection):
     columns = {
         row[1] for row in connection.execute("PRAGMA table_info(bronze_youtube_skimmed)")
@@ -356,6 +375,7 @@ def initialize_database(database_path=None):
         _migrate_socialblade_table_name(connection)
         _create_tables(connection)
         _ensure_youtube_feed_columns(connection)
+        _ensure_youtubeapi_video_columns(connection)
         _ensure_profile_queue_columns(connection)
         connection.execute("PRAGMA journal_mode = WAL")
         for table, legacy_name in legacy:
@@ -1196,6 +1216,9 @@ def insert_youtubeapi_video_stats(records, database_path=None):
             "likes": record.get("likes"),
             "comments": record.get("comments"),
         }
+        # Language is a property of the video rather than of this snapshot, so it
+        # stays out of the digest: adding it must not make already-stored
+        # observations look new and duplicate every row.
         digest_values = dict(values)
         if digest_values.get("collected_at"):
             digest_values["collected_at"] = digest_values["collected_at"][:10]
@@ -1211,6 +1234,8 @@ def insert_youtubeapi_video_stats(records, database_path=None):
                 values["views"],
                 values["likes"],
                 values["comments"],
+                record.get("default_audio_language"),
+                record.get("default_language"),
                 _digest(digest_values),
             )
         )
@@ -1220,8 +1245,84 @@ def insert_youtubeapi_video_stats(records, database_path=None):
             """
             INSERT OR IGNORE INTO bronze_youtubeapi_video_stats (
                 collected_at, video_id, channel_id, title, published_at,
-                duration_seconds, category_id, views, likes, comments, data_digest
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                duration_seconds, category_id, views, likes, comments,
+                default_audio_language, default_language, data_digest
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        return connection.total_changes - before
+
+
+def videos_missing_language(videos_per_channel=5, limit=None, database_path=None):
+    """Return untagged video ids, capped per channel, newest first.
+
+    Sampling per channel rather than taking a flat head keeps the backfill from
+    spending its whole budget on the handful of channels with hundreds of
+    videos, when the goal is coverage across all channels.
+    """
+
+    if videos_per_channel < 1:
+        raise ValueError("videos_per_channel must be at least one.")
+    initialize_database(database_path)
+    sql = """
+        WITH untagged AS (
+            SELECT
+                video_id,
+                channel_id,
+                MAX(published_at) AS published_at,
+                ROW_NUMBER() OVER (
+                    PARTITION BY channel_id
+                    ORDER BY MAX(published_at) DESC, video_id
+                ) AS rank_in_channel
+            FROM bronze_youtubeapi_video_stats
+            WHERE default_audio_language IS NULL AND default_language IS NULL
+            GROUP BY video_id, channel_id
+        )
+        SELECT video_id
+        FROM untagged
+        WHERE rank_in_channel <= ?
+        ORDER BY published_at DESC
+    """
+    parameters = [videos_per_channel]
+    if limit is not None:
+        sql += " LIMIT ?"
+        parameters.append(int(limit))
+    with _connection(database_path) as connection:
+        return [row[0] for row in connection.execute(sql, parameters)]
+
+
+def update_youtubeapi_video_languages(records, database_path=None):
+    """Backfill language tags onto every stored snapshot of each video.
+
+    Snapshots are append-only and deduplicated by digest, so a re-collected
+    video would otherwise never gain the columns added after it was stored.
+    Language does not change between snapshots, so it is written to all rows for
+    the video id. Only missing values are filled, leaving collected data intact.
+    """
+
+    rows = [
+        (
+            record.get("default_audio_language"),
+            record.get("default_language"),
+            record["video_id"],
+        )
+        for record in records
+        if record.get("video_id")
+        and (record.get("default_audio_language") or record.get("default_language"))
+    ]
+    if not rows:
+        return 0
+    initialize_database(database_path)
+    with _connection(database_path) as connection:
+        before = connection.total_changes
+        connection.executemany(
+            """
+            UPDATE bronze_youtubeapi_video_stats
+            SET default_audio_language = COALESCE(default_audio_language, ?),
+                default_language = COALESCE(default_language, ?)
+            WHERE video_id = ?
+              AND (default_audio_language IS NULL OR default_language IS NULL)
             """,
             rows,
         )

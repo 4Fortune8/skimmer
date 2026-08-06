@@ -61,14 +61,32 @@ collectors. Do not place the database in a directory served publicly.
    `--video-lookback-days` / `YOUTUBE_API_VIDEO_LOOKBACK_DAYS` (default 30,
    limits which videos are snapshotted), `--db-path` / `SKIMMER_DB_PATH`.
 
-3. Refresh and inspect the profile queue. This is normally run automatically
+3. Backfill language tags for videos collected before the language columns
+   existed. `defaultAudioLanguage`/`defaultLanguage` ride along free with the
+   API call in step 2, so videos collected from now on already carry them; this
+   only covers the backlog. It samples up to five untagged videos per channel
+   (roughly 2,000 units for the whole corpus) because language is decided per
+   channel, and it is resumable: exhausting the budget keeps everything written
+   so far and the next run continues where it stopped.
+
+   ```bash
+   skimmer-video-languages
+   ```
+
+   Useful flags: `--videos-per-channel` / `SKIMMER_LANGUAGE_SAMPLE` (default 5),
+   `--budget` / `YOUTUBE_API_DAILY_BUDGET`, `--limit` (cap total videos
+   requested), `--db-path` / `SKIMMER_DB_PATH`. Run it with a budget above the
+   collector's own (for example `--budget 10000`) to spend only the quota the
+   collector leaves behind.
+
+4. Refresh and inspect the profile queue. This is normally run automatically
    at the end of the YouTube collector:
 
    ```bash
    skimmer-profile-manager
    ```
 
-4. Collect the source-assigned profile metrics for channels the API could not
+5. Collect the source-assigned profile metrics for channels the API could not
    collect. Each collector waits 15 seconds between channels. A failure
    automatically moves the channel to the other scraper source; a second
    failure marks it for review rather than re-queueing it:

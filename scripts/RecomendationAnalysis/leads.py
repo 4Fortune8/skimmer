@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 try:
-    from . import data_access, metrics, shorts_probe
+    from . import data_access, exclusions, language_frames, metrics, shorts_probe
     from .algorithms import (
         breakout_outliers,
         channel_relative,
@@ -29,6 +29,8 @@ try:
     )
 except ImportError:  # pragma: no cover
     import data_access  # type: ignore[no-redef]
+    import exclusions  # type: ignore[no-redef]
+    import language_frames  # type: ignore[no-redef]
     import metrics  # type: ignore[no-redef]
     import shorts_probe  # type: ignore[no-redef]
     from algorithms import (  # type: ignore[no-redef]
@@ -76,6 +78,8 @@ IDENTITY_COLUMNS = [
     "sub_class",
     "video_count_class",
     "category_id",
+    "channel_language",
+    "language_source",
     "video_url",
     "channel_url",
 ]
@@ -97,6 +101,9 @@ def load_analysis_frame(
     exclude_shorts: bool = True,
     shorts_max_duration_seconds: int = metrics.SHORTS_MAX_DURATION_SECONDS,
     drop_unknown_duration: bool = False,
+    english_only: bool = False,
+    keep_unknown_language: bool = True,
+    exclusion_rules: Any = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame | None]:
     """Load and enrich the latest joined frame, plus optional video history.
 
@@ -108,11 +115,40 @@ def load_analysis_frame(
     million views is a much weaker idea signal than a long-form video with the
     same count. Snapshots are restricted to the surviving videos so the velocity
     algorithm sees a consistent population.
+
+    Non-English channels are removed for the same reason and at the same point.
+    Filtering here rather than at the end means weight-class norms, theme lift,
+    and niche saturation all describe the English-speaking market being targeted
+    instead of the whole corpus. Language is resolved before the shorts filter so
+    the detector sees every title a channel has, including its shorts.
+
+    ``exclusion_rules`` accepts the full saved rule list, but only ``corpus``
+    scoped rules act here; ``leads`` scoped rules are applied to scored results
+    instead. Passing the whole list rather than a pre-filtered one keeps callers
+    from having to know the distinction, and keeps the cache key covering both.
     """
 
     with data_access.connect(db_path) as conn:
         df = data_access.load_joined(conn=conn)
         snapshots = data_access.load_video_snapshots(conn=conn) if with_snapshots else None
+    if english_only:
+        before = len(df)
+        df = language_frames.filter_english(df, keep_unknown=keep_unknown_language)
+        logger.info(
+            "Excluded %d videos from non-English channels; %d videos remain.",
+            before - len(df),
+            len(df),
+        )
+    corpus_rules = exclusions.for_scope(exclusion_rules, "corpus")
+    if corpus_rules:
+        before = len(df)
+        df = exclusions.apply(df, corpus_rules, label="analysis frame")
+        logger.info(
+            "Excluded %d videos matching %d corpus exclusion rule(s); %d videos remain.",
+            before - len(df),
+            len(corpus_rules),
+            len(df),
+        )
     if exclude_shorts:
         before = len(df)
         df = metrics.exclude_shorts(
@@ -125,7 +161,7 @@ def load_analysis_frame(
     df = _coerce_video_id(df)
     if snapshots is not None:
         snapshots = _coerce_video_id(snapshots)
-        if exclude_shorts:
+        if exclude_shorts or corpus_rules:
             snapshots = snapshots[snapshots["video_id"].isin(set(df["video_id"]))].copy()
     return df, snapshots
 
@@ -337,6 +373,9 @@ def generate_leads(
     verify_shorts_timeout: float = shorts_probe.DEFAULT_TIMEOUT,
     verify_shorts_cache: Any = None,
     verify_shorts_over_fetch: float = 2.0,
+    english_only: bool = False,
+    keep_unknown_language: bool = True,
+    exclusion_rules: Any = None,
 ) -> pd.DataFrame:
     """Run the full composite lead pipeline and optionally export a CSV.
 
@@ -345,6 +384,11 @@ def generate_leads(
     ``top_n`` calls, the candidate list is over-fetched by
     ``verify_shorts_over_fetch`` before confirmed Shorts are dropped, then the
     surviving rows are truncated back to ``top_n``.
+
+    ``exclusion_rules`` are applied at two different points by scope: ``corpus``
+    rules inside ``load_analysis_frame`` before enrichment, and ``leads`` rules
+    to the scored results, before normalisation so the percentile ranks that
+    feed the composite are computed over the population actually being ranked.
     """
 
     df, snapshots = load_analysis_frame(
@@ -354,8 +398,12 @@ def generate_leads(
         exclude_shorts=exclude_shorts,
         shorts_max_duration_seconds=shorts_max_duration_seconds,
         drop_unknown_duration=drop_unknown_duration,
+        english_only=english_only,
+        keep_unknown_language=keep_unknown_language,
+        exclusion_rules=exclusion_rules,
     )
     results = run_algorithms(df, snapshots=snapshots, params=params)
+    results = exclusions.apply_to_results(results, exclusions.for_scope(exclusion_rules, "leads"))
     normalized = normalize_scores(results)
     leads = combine(normalized, weights=weights, source_df=df)
     leads = _apply_filters(leads, filters)

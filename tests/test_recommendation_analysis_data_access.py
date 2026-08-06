@@ -32,7 +32,9 @@ def analysis_db():
             category_id TEXT,
             views TEXT,
             likes TEXT,
-            comments TEXT
+            comments TEXT,
+            default_audio_language TEXT,
+            default_language TEXT
         );
         CREATE TABLE bronze_youtubeapi_channel_stats (
             id INTEGER PRIMARY KEY,

@@ -225,6 +225,10 @@ def _fetch_video_records(video_ids, database_path=None, budget=None):
                     "views": int(statistics["viewCount"]) if statistics.get("viewCount") else None,
                     "likes": int(statistics["likeCount"]) if statistics.get("likeCount") else None,
                     "comments": int(statistics["commentCount"]) if statistics.get("commentCount") else None,
+                    # Free with part=snippet, and the only source that identifies
+                    # romanized non-English titles correctly.
+                    "default_audio_language": snippet.get("defaultAudioLanguage"),
+                    "default_language": snippet.get("defaultLanguage"),
                 }
             )
     return [record for record in records if record.get("video_id") and record.get("channel_id")]

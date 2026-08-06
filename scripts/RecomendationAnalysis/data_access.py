@@ -25,6 +25,8 @@ VIDEO_COLUMNS = [
     "views",
     "likes",
     "comments",
+    "default_audio_language",
+    "default_language",
 ]
 
 CHANNEL_COLUMNS = [
@@ -76,7 +78,9 @@ def load_video_snapshots(
             category_id,
             views,
             likes,
-            comments
+            comments,
+            default_audio_language,
+            default_language
         FROM bronze_youtubeapi_video_stats
     """
     return _normalize_videos(_read_sql(sql, db_path=db_path, conn=conn))
@@ -88,6 +92,9 @@ def load_latest_videos(
 ) -> pd.DataFrame:
     """Load the newest YouTube API snapshot for each video_id."""
 
+    # Language tags are a property of the video, not of a snapshot, so they are
+    # coalesced across every snapshot: a video collected before the language
+    # columns existed carries them only on the rows the backfill touched.
     sql = """
         WITH ranked AS (
             SELECT
@@ -106,20 +113,31 @@ def load_latest_videos(
                     ORDER BY collected_at DESC, id DESC
                 ) AS rn
             FROM bronze_youtubeapi_video_stats
+        ),
+        languages AS (
+            SELECT
+                video_id,
+                MAX(default_audio_language) AS default_audio_language,
+                MAX(default_language) AS default_language
+            FROM bronze_youtubeapi_video_stats
+            GROUP BY video_id
         )
         SELECT
-            video_id,
-            channel_id,
-            title,
-            published_at,
-            collected_at,
-            duration_seconds,
-            category_id,
-            views,
-            likes,
-            comments
+            ranked.video_id,
+            ranked.channel_id,
+            ranked.title,
+            ranked.published_at,
+            ranked.collected_at,
+            ranked.duration_seconds,
+            ranked.category_id,
+            ranked.views,
+            ranked.likes,
+            ranked.comments,
+            languages.default_audio_language,
+            languages.default_language
         FROM ranked
-        WHERE rn = 1
+        LEFT JOIN languages ON languages.video_id = ranked.video_id
+        WHERE ranked.rn = 1
     """
     return _normalize_videos(_read_sql(sql, db_path=db_path, conn=conn))
 
@@ -221,7 +239,14 @@ def _normalize_videos(df: pd.DataFrame) -> pd.DataFrame:
         df[column] = pd.to_datetime(df[column], utc=True, errors="coerce", format="mixed")
     for column in ("duration_seconds", "views", "likes", "comments"):
         df[column] = pd.to_numeric(df[column], errors="coerce")
-    for column in ("video_id", "channel_id", "title", "category_id"):
+    for column in (
+        "video_id",
+        "channel_id",
+        "title",
+        "category_id",
+        "default_audio_language",
+        "default_language",
+    ):
         df[column] = df[column].astype("string")
     return df[VIDEO_COLUMNS]
 

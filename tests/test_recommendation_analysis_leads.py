@@ -5,7 +5,8 @@ import sqlite3
 import pandas as pd
 import pytest
 
-from scripts.RecomendationAnalysis import leads, metrics
+from scripts.RecomendationAnalysis import exclusions, leads, metrics
+from skimmer.domain import language as domain_language
 
 
 NOW = "2026-07-31T00:00:00Z"
@@ -28,7 +29,9 @@ def shorts_analysis_db(tmp_path):
             category_id TEXT,
             views TEXT,
             likes TEXT,
-            comments TEXT
+            comments TEXT,
+            default_audio_language TEXT,
+            default_language TEXT
         );
         CREATE TABLE bronze_youtubeapi_channel_stats (
             id INTEGER PRIMARY KEY,
@@ -161,6 +164,83 @@ def test_load_analysis_frame_restricts_snapshots_to_surviving_video_ids(shorts_a
     assert no_snapshots is None
 
 
+def test_corpus_scoped_exclusions_apply_before_enrichment(shorts_analysis_db):
+    """A corpus rule must move the channel baseline, not just hide rows."""
+
+    rules = [exclusions.make_rule("long 500", scope="corpus")]
+    df, _ = leads.load_analysis_frame(shorts_analysis_db, now=NOW, exclusion_rules=rules)
+
+    assert "long_500" not in video_ids(df)
+    baseline = df[df["channel_id"].eq("baseline")].sort_values("video_id")
+    assert len(baseline) == 4
+    # Excluding one long-form video drops the channel under the 5-video minimum sample, so its
+    # baseline goes from 301 to unavailable. Post-hoc row hiding could not have changed this.
+    assert baseline["channel_median_views"].isna().all()
+
+    unfiltered, _ = leads.load_analysis_frame(shorts_analysis_db, now=NOW)
+    unfiltered_baseline = unfiltered[unfiltered["channel_id"].eq("baseline")]
+    assert unfiltered_baseline["channel_median_views"].tolist() == [301.0] * 5
+
+
+def test_corpus_scoped_exclusions_restrict_snapshots(shorts_analysis_db):
+    rules = [exclusions.make_rule("long 500", scope="corpus")]
+    df, snapshots = leads.load_analysis_frame(shorts_analysis_db, now=NOW, exclusion_rules=rules)
+
+    assert snapshots is not None
+    assert "long_500" not in set(snapshots["video_id"].astype(str))
+    assert set(snapshots["video_id"].astype(str)).issubset(video_ids(df))
+
+
+def test_lead_scoped_exclusions_do_not_touch_the_analysis_frame(shorts_analysis_db):
+    """Taste filters must leave the corpus, and therefore the norms, intact."""
+
+    rules = [exclusions.make_rule("long 500", scope="leads")]
+    df, _ = leads.load_analysis_frame(shorts_analysis_db, now=NOW, exclusion_rules=rules)
+    unfiltered, _ = leads.load_analysis_frame(shorts_analysis_db, now=NOW)
+
+    assert video_ids(df) == video_ids(unfiltered)
+
+
+def test_generate_leads_applies_lead_scoped_exclusions_before_normalisation(monkeypatch):
+    source_df = pd.DataFrame(
+        {
+            "video_id": pd.Series(["v1", "v2"], dtype="string"),
+            "title": ["FIFA 26 reveal", "A normal video"],
+        }
+    )
+    seen: dict[str, pd.DataFrame] = {}
+
+    monkeypatch.setattr(leads, "load_analysis_frame", lambda **kwargs: (source_df, None))
+    monkeypatch.setattr(
+        leads,
+        "run_algorithms",
+        lambda df, snapshots=None, params=None: {"engagement": source_df.copy()},
+    )
+
+    def fake_normalize(results):
+        seen.update(results)
+        return results
+
+    monkeypatch.setattr(leads, "normalize_scores", fake_normalize)
+    monkeypatch.setattr(
+        leads,
+        "combine",
+        lambda normalized, weights=None, source_df=None: pd.DataFrame(
+            {"video_id": pd.Series(["v2"], dtype="string"), "composite_score": [1.0]}
+        ),
+    )
+
+    leads.generate_leads(
+        db_path="sentinel.sqlite",
+        now=NOW,
+        top_n=None,
+        verify_shorts=False,
+        exclusion_rules=[exclusions.make_rule("fifa")],
+    )
+
+    assert seen["engagement"]["video_id"].tolist() == ["v2"]
+
+
 def test_generate_leads_passes_shorts_kwargs_to_load_analysis_frame(monkeypatch):
     calls = []
     source_df = pd.DataFrame({"video_id": pd.Series(["v1"], dtype="string"), "views": [1]})
@@ -196,6 +276,9 @@ def test_generate_leads_passes_shorts_kwargs_to_load_analysis_frame(monkeypatch)
         "exclude_shorts": True,
         "shorts_max_duration_seconds": metrics.SHORTS_MAX_DURATION_SECONDS,
         "drop_unknown_duration": False,
+        "english_only": False,
+        "keep_unknown_language": True,
+        "exclusion_rules": None,
     }
     assert calls[1] == {
         "db_path": "sentinel.sqlite",
@@ -204,6 +287,9 @@ def test_generate_leads_passes_shorts_kwargs_to_load_analysis_frame(monkeypatch)
         "exclude_shorts": False,
         "shorts_max_duration_seconds": 180,
         "drop_unknown_duration": True,
+        "english_only": False,
+        "keep_unknown_language": True,
+        "exclusion_rules": None,
     }
 
 
@@ -261,3 +347,126 @@ def test_generate_leads_verify_shorts_false_bypasses_probe(monkeypatch):
     assert calls == []
     assert result["video_id"].tolist() == ["v1"]
     assert str(result["is_short_confirmed"].dtype) == "boolean"
+
+
+@pytest.fixture()
+def language_analysis_db(tmp_path):
+    """Two channels with identical view profiles, one English and one Spanish."""
+
+    db_path = tmp_path / "language_analysis.sqlite"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE bronze_youtubeapi_video_stats (
+            id INTEGER PRIMARY KEY,
+            video_id TEXT,
+            channel_id TEXT,
+            title TEXT,
+            published_at TEXT,
+            collected_at TEXT,
+            duration_seconds TEXT,
+            category_id TEXT,
+            views TEXT,
+            likes TEXT,
+            comments TEXT,
+            default_audio_language TEXT,
+            default_language TEXT
+        );
+        CREATE TABLE bronze_youtubeapi_channel_stats (
+            id INTEGER PRIMARY KEY,
+            channel_id TEXT,
+            channel_name TEXT,
+            subscribers TEXT,
+            subscribers_change TEXT,
+            views TEXT,
+            video_count TEXT,
+            country TEXT,
+            channel_published_at TEXT,
+            collected_at TEXT
+        );
+        """
+    )
+    rows = []
+    for index, views in enumerate([100, 200, 300, 400, 500], start=1):
+        rows.append((index, f"en_{index}", "english", f"English title {index}",
+                     "2026-07-01T00:00:00Z", "2026-07-30T00:00:00Z", "120", "22",
+                     str(views), "10", "2", "en-GB", None))
+    for index, views in enumerate([1000, 2000, 3000, 4000, 5000], start=1):
+        rows.append((index + 100, f"es_{index}", "spanish", f"Titulo espanol {index}",
+                     "2026-07-01T00:00:00Z", "2026-07-30T00:00:00Z", "120", "22",
+                     str(views), "10", "2", "es-419", None))
+    # A channel YouTube never tagged, whose emoji-only title gives the detector
+    # nothing to work with either: kept by default so leads are not lost.
+    rows.append((300, "unknown_1", "untagged", "🔥🔥🔥", "2026-07-01T00:00:00Z",
+                 "2026-07-30T00:00:00Z", "120", "22", "600", "10", "2", None, None))
+    conn.executemany(
+        """
+        INSERT INTO bronze_youtubeapi_video_stats
+        (id, video_id, channel_id, title, published_at, collected_at, duration_seconds,
+         category_id, views, likes, comments, default_audio_language, default_language)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.executemany(
+        """
+        INSERT INTO bronze_youtubeapi_channel_stats
+        (id, channel_id, channel_name, subscribers, subscribers_change, views, video_count, country, channel_published_at, collected_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (1, "english", "English Channel", "10000", "0", "100000", "100", "US", "2020-01-01T00:00:00Z", "2026-07-30T00:00:00Z"),
+            (2, "spanish", "Canal Espanol", "10000", "0", "100000", "100", "US", "2020-01-01T00:00:00Z", "2026-07-30T00:00:00Z"),
+            (3, "untagged", "Untagged Channel", "10000", "0", "100000", "100", "US", "2020-01-01T00:00:00Z", "2026-07-30T00:00:00Z"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+requires_language_model = pytest.mark.skipif(
+    not domain_language.model_path().exists(),
+    reason="fastText language model not downloaded; run 'make lid-model'",
+)
+
+
+def test_load_analysis_frame_keeps_every_language_by_default(language_analysis_db):
+    df, _ = leads.load_analysis_frame(language_analysis_db, now=NOW)
+    assert {"en_1", "es_1", "unknown_1"}.issubset(video_ids(df))
+
+
+@requires_language_model
+def test_load_analysis_frame_english_only_drops_non_english_channels(language_analysis_db):
+    df, _ = leads.load_analysis_frame(language_analysis_db, now=NOW, english_only=True)
+
+    assert {"en_1", "en_5"}.issubset(video_ids(df))
+    assert not video_ids(df) & {f"es_{index}" for index in range(1, 6)}
+    assert "unknown_1" in video_ids(df), "untagged channels are kept by default"
+    assert set(df["channel_language"]) == {"en", "und"}
+
+
+@requires_language_model
+def test_english_only_can_drop_unlabelled_channels(language_analysis_db):
+    df, _ = leads.load_analysis_frame(
+        language_analysis_db, now=NOW, english_only=True, keep_unknown_language=False
+    )
+    assert "unknown_1" not in video_ids(df)
+
+
+@requires_language_model
+def test_english_filter_runs_before_enrichment_so_baselines_are_english(language_analysis_db):
+    """The Spanish channel's larger view counts must not shift weight-class norms."""
+
+    everything, _ = leads.load_analysis_frame(language_analysis_db, now=NOW)
+    english, _ = leads.load_analysis_frame(language_analysis_db, now=NOW, english_only=True)
+
+    assert everything["views"].median() > english["views"].median()
+    assert english["views"].max() == 600, "only English and untagged videos remain"
+
+
+@requires_language_model
+def test_english_filter_restricts_snapshots_to_surviving_videos(language_analysis_db):
+    df, snapshots = leads.load_analysis_frame(language_analysis_db, now=NOW, english_only=True)
+    assert snapshots is not None
+    assert set(snapshots["video_id"].astype(str)).issubset(video_ids(df))
