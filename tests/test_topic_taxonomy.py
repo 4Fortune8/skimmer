@@ -23,6 +23,36 @@ class ClassifyTitleTests(unittest.TestCase):
             {},
         )
 
+    def test_topic_exclusion_is_scoped_to_one_topic(self):
+        # "psychology of" is a format marker for behaviour only. It must not
+        # discard the education label on a title that covers both.
+        labels = classify_title(
+            "New study: student loans and the psychology of debt avoidance", "27"
+        )
+        self.assertIn("education", labels)
+        self.assertNotIn("behavior", labels)
+
+    def test_entertainment_psychology_format_is_rejected(self):
+        for title in (
+            "The Psychology of Messi's Silent Dictatorship",
+            "The Secret Psychology Behind Johnny Depp's Iconic Roles",
+            "Prison Psychologist Says Her Cannibal Patient Is 'Shy'",
+        ):
+            self.assertNotIn("behavior", classify_title(title, "24"), msg=title)
+
+    def test_practitioner_signal_survives(self):
+        self.assertIn(
+            "behavior",
+            classify_title("How Harsh Parenting Changes Personality | Clinical Psychologist Explains", "22"),
+        )
+
+    def test_political_vaccine_content_is_not_health(self):
+        # v2 dropped `vaccin\w*`: on YouTube it is political discourse.
+        self.assertEqual(classify_title("Aaron Rodgers VINDICATED For Refusing COVID Vaccine!", "25"), {})
+
+    def test_military_and_fitness_bootcamps_are_not_education(self):
+        self.assertEqual(classify_title("Official U.S. Navy Bootcamp Graduation Livestream", "22"), {})
+
     def test_genre_exclusions_short_circuit_strong_terms(self):
         for title in (
             "Lofi Study Beats to Relax and Focus",
@@ -44,7 +74,7 @@ class ClassifyTitleTests(unittest.TestCase):
 
     def test_multiple_topics_may_apply(self):
         labels = classify_title(
-            "New study: student loans and the psychology of debt avoidance", "27"
+            "Student debt and the placebo effect on motivation", "27"
         )
         self.assertIn("education", labels)
         self.assertIn("behavior", labels)

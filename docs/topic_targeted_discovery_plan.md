@@ -136,6 +136,71 @@ Two methodology notes:
   avoids this by comparing within subscriber classes; the strategy 0 script
   applies a 1k floor to channel ranking for the same reason.
 
+#### Strategy 0 re-run (`terms-v2`)
+
+v1 warming surfaced political and entertainment content, so the terms were
+re-tuned against per-term productivity measurements rather than intuition.
+Labels for both versions are retained, so the runs stay comparable.
+
+| slice | v1 | v2 |
+| --- | ---: | ---: |
+| domain (any) | 533 | **281** |
+| health | 267 | 179 |
+| behavior | 156 | 36 |
+| education | 95 | 65 |
+| meta_science | 15 | **1** |
+| domain share | 0.089 % | **0.043 %** |
+| seed pool (conf >= 3) | 206 videos / 119 channels | 145 / 77 |
+
+**Terms removed, with the evidence:**
+
+| term | matches | why |
+| --- | ---: | --- |
+| `vaccin\w*` | 66 | ~85 % political (Fauci, RFK, Aaron Rodgers). Vaccines are a politics topic on YouTube, not a health one |
+| `testosterone` | 36 | masculinity culture-war content |
+| `psycholog(y\|ical)` | 140 | the "Psychology of X" entertainment format: celebrities, footballers, killers |
+| `dopamine` | 25 | music playlists ("Dopamine Reset 40Hz") and detox hustle content |
+| `bootcamp` | 21 | military and fitness bootcamps |
+| `tuition` (bare) | 39 | Indian TV drama, lofi tracks; now needs a cost or institution qualifier |
+| `new study` | 12 | local-news and political headlines |
+| `big five` | 2 | safari animals and 1960s bands |
+
+`obesity` was measured and **kept**: its high News-category share is genuine
+pharma and policy coverage, so the category proxy alone would have pruned it
+wrongly.
+
+**Terms that are fruitful:** `ozempic`, `blood sugar`, `blood pressure`,
+`cholesterol`, `creatine`, `supplements`, `seed oils`, `insulin resistance`
+(health); `college admissions` (0 % noise), `homeschool`, `higher education`,
+`school funding` (education); `clinical psychologist`, `willpower`,
+`attachment style`, `procrastinat\w*` (behaviour).
+
+A design correction fell out of this: exclusions are now split into global
+genre markers and per-topic ones. `psychology of` is noise for behaviour only,
+and applying it globally discarded the education label from titles covering
+both.
+
+**Seed supply is concentrated in one topic.** Channels with 2+ labelled videos:
+
+| topic | channels |
+| --- | ---: |
+| health | 29 |
+| education | 12 |
+| behavior | 4 |
+| meta_science | 0 |
+
+Repeat operators worth seeding from: Thomas DeLauer (4.03M), Ben Azadi (1.34M),
+Leonid Kim MD (840k), Dr. John Meyers (125k), Bazgha Khalid MD (56k, mean
+confidence 4.0). Several high-count channels are unusable as seeds despite
+their counts -- "The Insight Room" (12 labels, ~0 subs, ~1k peak views) and
+"Great Minds Advising" (8 labels, ~0 subs) will return thin or empty rails.
+
+**The domain, as this corpus sees it, is really just health** -- specifically
+doctor-explainer content. Education is thin, behaviour marginal, and
+meta-science absent. That materially narrows what layer 2 could be about, and
+it is the strongest signal yet that the finding engines ranked highest in the
+layer 2 proposal have no audience to land in.
+
 **This result does not settle Q1.** Discovery was seeded from high
 views-per-sub outliers and recommendation crawling, both topic-agnostic, so the
 corpus reflects what that seeding surfaced. A 0.089 % domain share is evidence

@@ -24,13 +24,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from skimmer.domain.topic_taxonomy import TOPICS, classify_title  # noqa: E402
+from skimmer.domain.topic_taxonomy import (  # noqa: E402
+    CLASSIFIER_VERSION,
+    TOPICS,
+    classify_title,
+)
 from skimmer.storage.bronze import (  # noqa: E402
     clear_video_topic_labels,
     insert_video_topic_labels,
 )
-
-CLASSIFIER_VERSION = "terms-v1"
 
 # Latest snapshot per video, joined to the latest channel snapshot. Both tables
 # hold repeated observations, so ROW_NUMBER collapses them before any ratio is

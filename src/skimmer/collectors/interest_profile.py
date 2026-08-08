@@ -389,7 +389,11 @@ def main(argv=None):
     parser.add_argument("--db", default=str(PROJECT_ROOT / "data" / "skimmer.db"))
     parser.add_argument("--classifier-version", default="terms-v1")
     parser.add_argument("--min-confidence", type=int, default=3)
-    parser.add_argument("--min-views", type=int, default=1000)
+    # Defaults must come from the module constants, not be repeated here --
+    # a literal 1000 silently shadowed WARM_MIN_VIEWS and cut warming from 24
+    # videos to 13, losing education entirely.
+    parser.add_argument("--min-views", type=int, default=WARM_MIN_VIEWS)
+    parser.add_argument("--warm-share", type=float, default=DEFAULT_WARM_SHARE)
     parser.add_argument("--per-topic", type=int, default=8)
     parser.add_argument("--dwell", type=int, default=DEFAULT_DWELL_SECONDS)
     parser.add_argument(
@@ -408,6 +412,7 @@ def main(argv=None):
         min_confidence=args.min_confidence,
         min_views=args.min_views,
         per_topic=args.per_topic,
+        warm_share=args.warm_share,
     )
     if not videos:
         print("No labelled videos matched; run scripts/classify_corpus_topics.py --write.")
