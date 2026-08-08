@@ -19,7 +19,8 @@ from skimmer.storage.bronze import (
     mark_youtube_api_failed,
     mark_youtube_api_succeeded,
     release_youtube_api_batch,
-    reserve_youtube_api_quota_unit,
+    release_youtube_api_quota,
+    reserve_youtube_api_quota,
     store_youtube_channel_id,
 )
 
@@ -29,9 +30,39 @@ DEFAULT_BATCH_SIZE = 5000
 DEFAULT_VIDEO_LOOKBACK_DAYS = 30
 REQUEST_TIMEOUT_SECONDS = 30
 
+# Quota cost per read (list) request, keyed by endpoint. Costs are per request,
+# not per returned item, and are independent of how many parts are requested --
+# `videos.list` is 1 unit whether it asks for one part or five.
+#
+# Write operations are not listed here because they do not go through
+# _request_json; `videos.insert` (1600) and `captions.download` (200) must
+# reserve their cost explicitly at the call site.
+ENDPOINT_COSTS = {
+    "channels": 1,
+    "playlistItems": 1,
+    "videos": 1,
+    "search": 100,
+}
+
 
 class QuotaExceeded(RuntimeError):
     pass
+
+
+def endpoint_cost(endpoint):
+    """Quota units charged for one read request to `endpoint`.
+
+    Unknown endpoints raise rather than defaulting to 1. A silent default is
+    what made search-based discovery under-report by 100x: the local budget
+    check never trips and the collector takes hard 403s with no graceful stop.
+    """
+    try:
+        return ENDPOINT_COSTS[endpoint]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown YouTube API endpoint {endpoint!r}; add its quota cost to "
+            "ENDPOINT_COSTS before calling it."
+        ) from exc
 
 
 def _now():
@@ -76,10 +107,15 @@ def _parse_duration_seconds(value):
 
 
 def _request_json(endpoint, params, database_path=None, budget=None):
-    if budget is not None and not reserve_youtube_api_quota_unit(
-        budget, database_path=database_path
-    ):
-        raise QuotaExceeded(f"YouTube API budget exhausted at {budget} units.")
+    cost = endpoint_cost(endpoint)
+    reserved = 0
+    if budget is not None:
+        if not reserve_youtube_api_quota(cost, budget, database_path=database_path):
+            raise QuotaExceeded(
+                f"YouTube API budget exhausted at {budget} units: "
+                f"{endpoint} costs {cost}."
+            )
+        reserved = cost
 
     query = dict(params)
     query["key"] = youtube_api_key()
@@ -102,6 +138,11 @@ def _request_json(endpoint, params, database_path=None, budget=None):
             f"YouTube API request failed for {endpoint}: HTTP {exc.code} {reason or 'unknown_error'}"
         ) from exc
     except urllib.error.URLError as exc:
+        # The request never reached the API, so it spent local budget but no
+        # real quota. Refund it -- at 100 units per search, silently burning
+        # the reservation on a transport blip costs a meaningful slice of the
+        # daily allowance.
+        release_youtube_api_quota(reserved, database_path=database_path)
         raise RuntimeError(f"YouTube API request failed for {endpoint}: {exc.reason}") from exc
     return data
 

@@ -30,6 +30,8 @@ from skimmer.storage.bronze import (
     release_channel_id_resolution_batch,
     release_profile_batch,
     release_youtube_api_batch,
+    release_youtube_api_quota,
+    reserve_youtube_api_quota,
     reserve_youtube_api_quota_unit,
     refresh_profile_queue,
     select_high_views_per_subscriber_seeds,
@@ -628,6 +630,58 @@ class BronzeStoreTests(unittest.TestCase):
             reserve_youtube_api_quota_unit(2, database_path=self.database_path)
         )
         self.assertEqual(get_youtube_api_quota_usage(database_path=self.database_path), 2)
+
+    def test_multi_unit_reservation_charges_full_cost(self):
+        self.assertTrue(
+            reserve_youtube_api_quota(100, 250, database_path=self.database_path)
+        )
+        self.assertEqual(
+            get_youtube_api_quota_usage(database_path=self.database_path), 100
+        )
+        self.assertTrue(
+            reserve_youtube_api_quota(100, 250, database_path=self.database_path)
+        )
+        self.assertEqual(
+            get_youtube_api_quota_usage(database_path=self.database_path), 200
+        )
+
+    def test_multi_unit_reservation_refuses_partial_overrun(self):
+        # A 100-unit search must not squeeze into 60 units of remaining budget.
+        self.assertTrue(
+            reserve_youtube_api_quota(40, 100, database_path=self.database_path)
+        )
+        self.assertFalse(
+            reserve_youtube_api_quota(100, 100, database_path=self.database_path)
+        )
+        self.assertEqual(
+            get_youtube_api_quota_usage(database_path=self.database_path), 40
+        )
+
+    def test_reservation_may_consume_budget_exactly(self):
+        self.assertTrue(
+            reserve_youtube_api_quota(100, 100, database_path=self.database_path)
+        )
+        self.assertFalse(
+            reserve_youtube_api_quota(1, 100, database_path=self.database_path)
+        )
+        self.assertEqual(
+            get_youtube_api_quota_usage(database_path=self.database_path), 100
+        )
+
+    def test_release_refunds_reservation_and_clamps_at_zero(self):
+        reserve_youtube_api_quota(100, 500, database_path=self.database_path)
+        release_youtube_api_quota(100, database_path=self.database_path)
+        self.assertEqual(
+            get_youtube_api_quota_usage(database_path=self.database_path), 0
+        )
+        release_youtube_api_quota(100, database_path=self.database_path)
+        self.assertEqual(
+            get_youtube_api_quota_usage(database_path=self.database_path), 0
+        )
+
+    def test_reservation_rejects_non_positive_units(self):
+        with self.assertRaises(ValueError):
+            reserve_youtube_api_quota(0, 100, database_path=self.database_path)
 
     def test_socialblade_waits_for_and_uses_canonical_channel_id(self):
         record = {

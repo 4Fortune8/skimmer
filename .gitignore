@@ -6,6 +6,14 @@
 /.socialblade-cloudflare-cooldown
 /.socialblade-firefox-profile
 /.socialblade-firefox-profile.lock
+/.interest-firefox-profile
+/.interest-firefox-profile.lock
+
+# Secrets. NOTE: .env was tracked and pushed before being ignored, so the key
+# it held is in public history -- ignoring it here does not un-expose it.
+.env
+.env.*
+!.env.example
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
